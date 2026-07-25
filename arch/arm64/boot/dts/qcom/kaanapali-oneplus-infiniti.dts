@@ -4,56 +4,49 @@
 
 #include <dt-bindings/clock/qcom,kaanapali-dispcc.h>
 #include <dt-bindings/clock/qcom,kaanapali-gcc.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 
 #include "kaanapali.dtsi"
+#include "pmh0104-kaanapali.dtsi"     /* SPMI1: SID-9 (WCN7860 BT_EN on pmh0104_j gpio5) */
+#include "pmh0110-kaanapali.dtsi"     /* SPMI0: SID-3/5/6/8 (touch AVDD switch on pmh0110_d gpio9) */
 #include "pmih0108-kaanapali.dtsi"    /* SPMI1: SID-7 (eUSB2 repeater) */
+#include "pmk8850.dtsi"               /* SPMI0: SID-0 (PON, reboot reason SDAM) */
 
 / {
     model = "OnePlus 15";
     compatible = "oneplus,infiniti", "qcom,kaanapali";
     chassis-type = "handset";
 
-    chosen {
-        // bootargs = "root=PARTUUID=4B3A4040-F3F4-411C-B61B-D9783E4A9E25";
-
-        #address-cells = <2>;
-        #size-cells = <2>;
-        ranges;
-
-        framebuffer: framebuffer@fc800000 {
-            compatible = "simple-framebuffer";
-            reg = <0x0 0xfc800000 0x0 0x2b00000>;
-            width = <1272>;
-            height = <2772>;
-            stride = <(1272 * 4)>;
-            format = "a8r8g8b8";
-
-            clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
-                 <&dispcc DISP_CC_MDSS_AHB_CLK>,
-                 <&dispcc DISP_CC_MDSS_MDP_CLK>,
-                 <&dispcc DISP_CC_MDSS_MDP_LUT_CLK>,
-                 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
-                 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
-                 <&dispcc DISP_CC_MDSS_BYTE0_INTF_CLK>,
-                 <&dispcc DISP_CC_MDSS_PCLK0_CLK>,
-                 <&dispcc DISP_CC_MDSS_ESC0_CLK>;
-
-            power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>;
-
-            memory-region = <&cont_splash_mem>;
-
-            vci-supply = <&pmh0101_l13>;
-            vddio-supply = <&pmh0101_l12>;
-            vdd-supply = <&pmh0101_l11>;
-            vdds-supply = <&pmh0110_d_l3>;
-        };
+    /* qcom_geni_serial derives its line number from a serial* alias and
+     * fails probe with "Invalid line -19" without one (measured on the
+     * first connectivity boot). serial1 matches the MTP, keeping serial0
+     * for the uart7 debug UART if it is ever enabled. */
+    aliases {
+        serial1 = &uart18;
     };
 
+    /* cont_splash_mem stays reserved: the bootloader still scans out of it
+     * until the DPU is reprogrammed; freeing it is a later cleanup. */
     reserved-memory {
         cont_splash_mem: memory@fc800000 {
             reg = <0x0 0xfc800000 0x0 0x2b00000>;
             no-map;
+        };
+
+        /* Crash forensics across the warm reset: suspend-path failures
+         * self-reboot (panic=30, or a NoC-error hard reset) into the
+         * stock chain and take dmesg with them. ramoops + ECC preserves
+         * the last records in DDR (a warm reset does not scrub it).
+         * 0xd7400000 sits in the free window below rmtfs@d7c00000;
+         * nothing else reserves it.
+         */
+        ramoops@d7400000 {
+            compatible = "ramoops";
+            reg = <0x0 0xd7400000 0x0 0x400000>;
+            record-size = <0x40000>;
+            console-size = <0x80000>;
+            ecc-size = <16>;
         };
     };
 
@@ -86,6 +79,94 @@
             clocks = <&rpmhcc RPMH_CXO_CLK_A>;
             clock-mult = <1>;
             clock-div = <2>;
+        };
+    };
+
+    /*
+     * Touchscreen AVDD comes from a load switch enabled by pmh0110_d
+     * gpio9 (downstream infiniti-oplus-tp-24831.dtsi: avdd is a PMIC
+     * gpio, not a named LDO). The switched rail's voltage is UNMEASURED
+     * (typical panel-touch AVDD is 3.0-3.3 V); modeled as a fixed
+     * regulator with only the enable gpio until verified on hardware.
+     */
+    vreg_ts_avdd: regulator-ts-avdd {
+        compatible = "regulator-fixed";
+        regulator-name = "vreg_ts_avdd";
+
+        gpio = <&pmh0110_d_e0_gpios 9 GPIO_ACTIVE_HIGH>;
+        enable-active-high;
+    };
+
+    /*
+     * WCN7860 wifi+BT combo. The chip is the WCN7850's successor and no
+     * mainline driver knows it by name yet; the PMU node reuses the
+     * qcom,wcn7850-pmu power sequencer, whose supply set matches both the
+     * Qualcomm kaanapali-mtp.dts WCN785x wiring and the downstream
+     * canoe-wcn786x-bt.dtsi rails for this exact board (L2G/L3G/S2J/S1J/
+     * S7F/S8F + RF_CLK1; BT_EN pmh0104_j gpio5, WL_EN tlmm 16, SW_CTRL
+     * tlmm 18 all byte-match downstream). Supply mapping follows the MTP
+     * (same PMIC set); the two boards agree on every rail downstream
+     * names.
+     */
+    wcn7860_pmu: wcn7860-pmu {
+        compatible = "qcom,wcn7850-pmu";
+
+        pinctrl-0 = <&bt_default>, <&sw_ctrl_default>, <&wlan_en>;
+        pinctrl-names = "default";
+
+        bt-enable-gpios = <&pmh0104_j_e1_gpios 5 GPIO_ACTIVE_HIGH>;
+        wlan-enable-gpios = <&tlmm 16 GPIO_ACTIVE_HIGH>;
+
+        vdd-supply = <&pmh0104_s2>;
+        vddio-supply = <&pmh0110_g_l2>;
+        vddio1p2-supply = <&pmh0110_g_l3>;
+        vddaon-supply = <&pmh0110_g_s7>;
+        vdddig-supply = <&pmh0104_s1>;
+        vddrfa1p2-supply = <&pmh0110_f_s7>;
+        vddrfa1p8-supply = <&pmh0110_f_s8>;
+
+        clocks = <&rpmhcc RPMH_RF_CLK1>;
+
+        regulators {
+            vreg_pmu_rfa_cmn: ldo0 {
+                regulator-name = "vreg_pmu_rfa_cmn";
+            };
+
+            vreg_pmu_aon_0p59: ldo1 {
+                regulator-name = "vreg_pmu_aon_0p59";
+            };
+
+            vreg_pmu_wlcx_0p8: ldo2 {
+                regulator-name = "vreg_pmu_wlcx_0p8";
+            };
+
+            vreg_pmu_wlmx_0p85: ldo3 {
+                regulator-name = "vreg_pmu_wlmx_0p85";
+            };
+
+            vreg_pmu_btcmx_0p85: ldo4 {
+                regulator-name = "vreg_pmu_btcmx_0p85";
+            };
+
+            vreg_pmu_rfa_0p8: ldo5 {
+                regulator-name = "vreg_pmu_rfa_0p8";
+            };
+
+            vreg_pmu_rfa_1p2: ldo6 {
+                regulator-name = "vreg_pmu_rfa_1p2";
+            };
+
+            vreg_pmu_rfa_1p8: ldo7 {
+                regulator-name = "vreg_pmu_rfa_1p8";
+            };
+
+            vreg_pmu_pcie_0p9: ldo8 {
+                regulator-name = "vreg_pmu_pcie_0p9";
+            };
+
+            vreg_pmu_pcie_1p8: ldo9 {
+                regulator-name = "vreg_pmu_pcie_1p8";
+            };
         };
     };
 
@@ -264,7 +345,11 @@
 
         pmh0101_l12: ldo12 {
             regulator-name = "pmh0101_l12";
-            regulator-min-microvolt = <1200000>;
+            /* panel vddio: sole consumer is mdss_dsi0 panel@0 vddio-supply.
+             * downstream + Qualcomm MTP (kaanapali-mtp vreg_l12b_1p8) run this
+             * at 1.8 V; the 1.2 V floor left the DDIC IO ring underpowered
+             * (regulator_summary showed 1.2 V), so pin it at 1.8 V. */
+            regulator-min-microvolt = <1800000>;
             regulator-max-microvolt = <1800000>;
 
             regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
@@ -814,13 +899,315 @@
     };
 };
 
+/* WCN7860 BT_EN. Pin config copied verbatim from kaanapali-mtp.dts
+ * bt_default; downstream canoe-wcn786x-bt.dtsi bt_en agrees (gpio5,
+ * function normal, output, power-source 1). */
+&pmh0104_j_e1_gpios {
+    bt_default: bt-default-state {
+        pins = "gpio5";
+        function = "normal";
+        input-disable;
+        output-enable;
+        output-low;
+        bias-disable;
+        power-source = <1>;
+    };
+};
+
 &pmih0108_e1_eusb2_repeater {
     vdd18-supply = <&pmh0101_l15>;
     vdd3-supply = <&pmh0101_l5>;
 };
 
+/*
+ * Synaptics S3910 touch controller, TouchComm (TCM) over SPI on QUP4 SE0.
+ * Wiring from the downstream infiniti-oplus-tp-24831.dtsi (OnePlusOSS
+ * sm8850 tree): SPI mode 0 @ 10 MHz, IRQ tlmm gpio158, reset tlmm gpio159
+ * active-low, VDDI 1.8 V, AVDD via the pmh0110_d gpio9 load switch (see
+ * vreg_ts_avdd above).
+ */
+&spi19 {
+    status = "okay";
+
+    touchscreen@0 {
+        compatible = "syna,s3910";
+        reg = <0>;
+
+        spi-max-frequency = <10000000>;
+
+        /*
+         * Trigger type from the downstream raw request_irq flag 0x2008 =
+         * IRQF_ONESHOT | IRQF_TRIGGER_LOW, i.e. active-low level (the 8T
+         * TCM binding example uses the same 0x2008). Still hardware-
+         * UNVERIFIED; edge-falling is the fallback candidate if the line
+         * turns out to be edge-type.
+         */
+        interrupts-extended = <&tlmm 158 IRQ_TYPE_LEVEL_LOW>;
+
+        reset-gpios = <&tlmm 159 GPIO_ACTIVE_LOW>;
+
+        /* AVDD: the gpio load switch, voltage unmeasured (see above) */
+        vdd-supply = <&vreg_ts_avdd>;
+        /*
+         * VDDI 1.8 V: downstream power,vddi-supply = L4B, i.e. LDO4 on
+         * the PMIC with id "B" -> the qcom,pmic-id = "B_E0" block above
+         * = pmh0101_l4 (1.8 V fixed, matching the downstream 1.8 V
+         * claim; none of the pmh0110 L4 rails is 1.8 V). UNVERIFIED on
+         * hardware.
+         */
+        vcc-supply = <&pmh0101_l4>;
+
+        pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
+        pinctrl-names = "default";
+    };
+};
+
 &tlmm {
     gpio-reserved-ranges = <36 8>, <74 1>, <119 2>, <144 4>;
+
+    ts_int_default: ts-int-default-state {
+        pins = "gpio158";
+        function = "gpio";
+        drive-strength = <2>;
+        bias-pull-up;
+    };
+
+    ts_reset_default: ts-reset-default-state {
+        pins = "gpio159";
+        function = "gpio";
+        drive-strength = <2>;
+        bias-disable;
+    };
+
+    /* [DTBO] qcom,platform-reset-gpio = tlmm 171. Drive strength / bias
+     * modeled on kaanapali-mtp.dts sde_dsi_active (gpio98 there). */
+    sde_dsi_active: sde-dsi-active-state {
+        pins = "gpio171";
+        function = "gpio";
+        drive-strength = <8>;
+        bias-disable;
+    };
+
+    sde_dsi_suspend: sde-dsi-suspend-state {
+        pins = "gpio171";
+        function = "gpio";
+        drive-strength = <2>;
+        bias-pull-down;
+    };
+
+    /* [DTBO] qcom,platform-te-gpio = tlmm 86 -- same pin as the MTP donor;
+     * states copied verbatim from kaanapali-mtp.dts. */
+    sde_te_active: sde-te-active-state {
+        pins = "gpio86";
+        function = "mdp_vsync";
+        drive-strength = <2>;
+        bias-pull-down;
+    };
+
+    sde_te_suspend: sde-te-suspend-state {
+        pins = "gpio86";
+        function = "mdp_vsync";
+        drive-strength = <2>;
+        bias-pull-down;
+    };
+
+    /* WCN7860 pins: WL_EN gpio16, SW_CTRL gpio18, PCIe0 gpio102-104.
+     * All copied verbatim from kaanapali-mtp.dts; downstream
+     * canoe-wcn786x-bt.dtsi / canoe-peach-cnss.dtsi / canoe-pcie.dtsi
+     * use the same gpios on this board. */
+    wlan_en: wlan-en-state {
+        pins = "gpio16";
+        function = "gpio";
+        drive-strength = <8>;
+        bias-pull-down;
+    };
+
+    sw_ctrl_default: sw-ctrl-default-state {
+        pins = "gpio18";
+        function = "gpio";
+        bias-pull-down;
+    };
+
+    pcie0_default_state: pcie0-default-state {
+        perst-n-pins {
+            pins = "gpio102";
+            function = "gpio";
+            drive-strength = <2>;
+            bias-disable;
+        };
+
+        clkreq-n-pins {
+            pins = "gpio103";
+            function = "pcie0_clk_req_n";
+            drive-strength = <2>;
+            bias-pull-up;
+        };
+
+        wake-n-pins {
+            pins = "gpio104";
+            function = "gpio";
+            drive-strength = <2>;
+            bias-pull-up;
+        };
+    };
+};
+
+/*
+ * WCN7860 Bluetooth, HCI over the 4-wire HS-UART (downstream
+ * qupv3_se18_4uart @ 0x1994000 = mainline uart18; enabled by
+ * canoe-wcn786x-bt.dtsi on this board).
+ *
+ * The chip is NOT a WCN7850: its BT firmware family is brhbtfw20/brhbtnv20
+ * (read from this unit's own stock bluetooth partition), which no mainline
+ * btqca soc type emits. qcom,wcn7850-bt is used for the closest init flow
+ * (TLV rampatch + pwrseq power host), with firmware-name overriding the
+ * wcn7850 hmt* defaults: [0] extension-less NVM stem -> btqca appends the
+ * chip-reported board id (brhbtnv20.bXX / .bin), [1] the rampatch.
+ * Whether the WCN7860 accepts the wcn7850 EDL/TLV flow is THE experiment.
+ */
+&uart18 {
+    status = "okay";
+
+    bluetooth {
+        compatible = "qcom,wcn7850-bt";
+
+        vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+        vddaon-supply = <&vreg_pmu_aon_0p59>;
+        vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+        vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+        vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+        vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+        vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+
+        /* Operating rate, applied via the PERI-subsystem baud command
+         * (hci_qca qca_peri_set_baudrate — on BRAHMA the shared UART's
+         * baud belongs to the peri SS; the wcn7850 BT VSC is ignored by
+         * this ROM, measured gens 44/46: with only the BT VSC every
+         * post-switch command timed out, which is why this was pinned to
+         * 115200 through gens 47-59). 3.2M is the rate the GANGES
+         * sibling ships at on retail SM8750 handhelds (ROCKNIX) on the
+         * same geni UART family; the vendor stack runs this chip at 8M
+         * (baud enum 0x15) — a later rung once 3.2M is proven. */
+        max-speed = <3200000>;
+
+        firmware-name = "brhbtnv20", "brhbtfw20.mbn";
+    };
+};
+
+&mdss {
+    status = "okay";
+};
+
+&mdss_dsi0 {
+    /* [DTBO] downstream dsi ctrl vdda-1p2 = L1D (pmh0110_d_l1), same rail
+     * the MTP donor uses for vdda. */
+    vdda-supply = <&pmh0110_d_l1>;
+
+    status = "okay";
+
+    panel@0 {
+        /*
+         * PANEL IDENTITY: AD296 vs AA601. Live DPU state (1272x2772) rules
+         * out AC180 (1264x2780); AD296 and AA601 share geometry AND PPS, so
+         * only the vendor INIT sequence distinguishes them (AA601 writes both
+         * PPS slots + a different page-4f/gamma block).
+         *
+         * AD296 was an ASSUMPTION that was never checked. Evidence for AA601:
+         * this unit's downstream TOUCH firmware is named "AA601"
+         * (notes/touch-bringup.md), and every AD296-premised fix
+         * (slice_per_pkt=2, DSI link rate pinned to stock, stock wire order)
+         * left the DDIC alive (power_mode 0x9C, self-diag 0xC0), answering DCS
+         * reads, and receiving frames (INTF_FRAME_COUNT advances per commit)
+         * while still showing its white default -- i.e. never armed by the
+         * sequence it expects. Trying AA601.
+         * DDIC part id for the record: RDID1/2/3 = 98 04 01.
+         */
+        compatible = "oneplus,aa601-a0020";
+        reg = <0>;
+
+        pinctrl-0 = <&sde_dsi_active &sde_te_active>;
+        pinctrl-1 = <&sde_dsi_suspend &sde_te_suspend>;
+        pinctrl-names = "default", "sleep";
+
+        /* [DTBO] panel rails (oplus_dsi_panel_custom_pwr_supply +
+         * qcom,dsi-display vddio/vdd/vci phandles -> L12B/L11B/L13B):
+         *   vddio 1.8 V, vdd 1.2 V, vci 3.0 V.
+         * The two extra oplus power-enable pins (pmk8850 GPIO1,
+         * pmh0101 GPIO4) are NOT modeled in v1: the bootloader leaves
+         * them on and nothing here turns them off. Follow-up: model as
+         * gpio-gated fixed regulators once pmk8850.dtsi/pmh0101.dtsi
+         * are included for the button work anyway. */
+        vddio-supply = <&pmh0101_l12>;
+        vdd-supply = <&pmh0101_l11>;
+        vci-supply = <&pmh0101_l13>;
+
+        /* [DTBO] qcom,platform-reset-gpio = <&tlmm 171 0>, active low
+         * (reset sequence drives 1-0-1 with the panel out of reset high) */
+        reset-gpios = <&tlmm 171 GPIO_ACTIVE_LOW>;
+
+        port {
+            panel0_in: endpoint {
+                remote-endpoint = <&mdss_dsi0_out>;
+            };
+        };
+    };
+};
+
+&mdss_dsi0_out {
+    remote-endpoint = <&panel0_in>;
+    data-lanes = <0 1 2 3>;    /* [DTBO] lane_map_0123, 4 lanes */
+};
+
+&mdss_dsi0_phy {
+    /* [DTBO] downstream phy vdda-0p9 = L3D (pmh0110_d_l3, 0.88 V) --
+     * the same rail the old simple-framebuffer node held as "vdds" */
+    vdds-supply = <&pmh0110_d_l3>;
+
+    status = "okay";
+};
+
+/*
+ * PCIe0 carries the WCN7860 WLAN (downstream: qcom,cnss-peach@b0000000,
+ * PCIe RC0, perst gpio102 / wake gpio104 per canoe-pcie.dtsi -- same pins
+ * as kaanapali-mtp.dts). The chip enumerated as 17cb:110e (first boot) -- the "peach" PCI device id. pci17cb,110e is matched by both
+ * pci-pwrctrl-pwrseq (power sequencing) and ath12k (WCN7860 hw params,
+ * QCC2072-based, carried from Teguh Sobirin's SM8750 port of the same
+ * 0x110e device).
+ */
+&pcie0 {
+    pinctrl-0 = <&pcie0_default_state>;
+    pinctrl-names = "default";
+
+    status = "okay";
+};
+
+&pcie0_phy {
+    /* MTP: vdda-phy = L3I 0.88 V, vdda-pll = L1D 1.2 V; both rails exist
+     * on this board under the pmh0110 labels. */
+    vdda-phy-supply = <&pmh0110_i_l3>;
+    vdda-pll-supply = <&pmh0110_d_l1>;
+
+    status = "okay";
+};
+
+&pcie_port0 {
+    wake-gpios = <&tlmm 104 GPIO_ACTIVE_HIGH>;
+    reset-gpios = <&tlmm 102 GPIO_ACTIVE_LOW>;
+
+    wifi@0 {
+        compatible = "pci17cb,110e";
+        reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+        vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+        vddaon-supply = <&vreg_pmu_aon_0p59>;
+        vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+        vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+        vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+        vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+        vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+        vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+        vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+    };
 };
 
 &ufs_mem_hc {
@@ -870,6 +1257,35 @@
 
 &lpass_wsamacro {
     status = "disabled";
+};
+
+/*
+ * ADSP: stock runs the OPLUS battery gauge on the ADSP (stock dtbo:
+ * oplus,adsp_gauge). The SOCCP-side battery manager answers the standard
+ * battmgr protocol but with an uninitialized default profile (capacity 0,
+ * QRD model string, frozen OCV) while live ADC telemetry (voltage/current/
+ * temp) works — the fuel-gauge algorithm lives on the ADSP. Boot the ADSP
+ * with the stock-signed firmware so the gauge service can come up. The
+ * LPASS audio nodes stay disabled below: audio is a separate campaign, and
+ * nothing here consumes the q6prmcc clocks.
+ */
+/*
+ * The OnePlus adsp.mbn is bigger than the reference kaanapali firmware:
+ * its (relocatable) segments span 0x5000000 (80 MiB), so the dtsi's
+ * 0x4c00000 (76 MiB) carveout fails qcom_mdt_load's bounds check with
+ * "segment outside memory range". Grow the carveout in place; the next
+ * reserved region above is rmtfs@d7c00000, so 0xa1400000 + 0x5000000 =
+ * 0xa6400000 collides with nothing.
+ */
+&adspslpi_mem {
+    reg = <0x0 0xa1400000 0x0 0x5000000>;
+};
+
+&remoteproc_adsp {
+    firmware-name = "qcom/kaanapali/adsp.mbn",
+                    "qcom/kaanapali/adsp_dtb.mbn";
+
+    status = "okay";
 };
 
 &remoteproc_soccp {
