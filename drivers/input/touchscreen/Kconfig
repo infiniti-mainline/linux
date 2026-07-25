@@ -540,9 +540,10 @@ config TOUCHSCREEN_S6SY761
 
 config TOUCHSCREEN_SYNAPTICS_TCM_ONCELL
 	tristate "Synaptics TCM Oncell Touchscreen driver"
-	depends on I2C
+	depends on SPI_MASTER
 	help
-	  Say Y if you have the Synaptics S3908 TCM Oncell
+	  Say Y if you have a Synaptics S3908 or S3910 TCM Oncell
+	  touchscreen connected over SPI.
 
 	  If unsure, say N
 

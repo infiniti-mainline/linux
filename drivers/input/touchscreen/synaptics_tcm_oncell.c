@@ -6,27 +6,21 @@
  *  Copyright (c) 2024 Caleb Connolly <caleb@postmarketos.org>
  */
 
-#include <asm-generic/unaligned.h>
-#include <linux/i2c.h>
-#include <linux/input.h>
-#include <linux/input/touchscreen.h>
-#include <linux/mod_devicetable.h>
-#include <linux/module.h>
-#include <linux/property.h>
-#include <asm/unaligned.h>
+#include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
+#include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input/touchscreen.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/of_gpio.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
+#include <linux/spi/spi.h>
 
 /*
- * The TCM oncell interface uses a command byte, which may be followed by additional
- * data. The packet format is defined in the tcm_cmd struct.
+ * The TCM oncell interface uses a command byte followed by a 16-bit LE
+ * payload length (see tcm_send_cmd_noargs() below).
  *
  * The following list only defines commands that are used in this driver (and their
  * counterparts for context). Vendor reference implementations can be found at
@@ -87,12 +81,6 @@ struct tcm_message_header {
 	__le16 length;
 } __packed;
 
-struct tcm_cmd {
-	u8 cmd;
-	__le16 length;
-	u8 data[];
-};
-
 struct tcm_identification {
 	struct tcm_message_header header;
 	u8 version;
@@ -122,9 +110,10 @@ struct tcm_app_info {
 	u8 has_hybrid_data[2];
 } __packed;
 
+#define TCM_BUF_SIZE	256
+
 struct tcm_data {
-	struct i2c_client *client;
-	struct regmap *regmap;
+	struct spi_device *spi;
 	struct input_dev *input;
 	struct gpio_desc *reset_gpio;
 	struct completion response;
@@ -133,60 +122,62 @@ struct tcm_data {
 
 	/* annoying state */
 	u16 buf_size;
-	char buf[256];
+	char buf[TCM_BUF_SIZE];
+
+	/*
+	 * DMA-safe transfer buffers (the QUP this sits on can do GPI DMA,
+	 * so SPI buffers must not live on the stack or mid-struct).
+	 * tx_fill is clocked out on MOSI during reads: the vendor SPI
+	 * transport (synaptics_tcm_spi.c in the tree referenced above)
+	 * fills the TX buffer with 0xff for reads, so do the same rather
+	 * than let the controller shift out zeros. rx_buf is only touched
+	 * from the IRQ thread. tx_cmd is protected by the response
+	 * completion flow (one command in flight at a time).
+	 */
+	u8 *tx_fill;
+	u8 *rx_buf;
+	u8 *tx_cmd;
 };
 
-static int tcm_send_cmd(struct tcm_data *tcm, struct tcm_cmd *cmd)
-{
-	struct i2c_client *client = tcm->client;
-	struct i2c_msg msg;
-	int ret;
-
-	dev_dbg(&client->dev, "sending command %#x\n", cmd->cmd);
-
-	msg.addr = client->addr;
-	msg.flags = 0;
-	msg.len = 1 + cmd->length;
-	msg.buf = (u8 *)cmd;
-
-	ret = i2c_transfer(client->adapter, &msg, 1);
-	if (ret == 1)
-		return 0;
-	else if (ret < 0)
-		return ret;
-	else
-		return -EIO;
-}
-
+/*
+ * A TCM command packet is a command byte followed by a 16-bit LE payload
+ * length. The original (I2C, OnePlus 8T) version of this driver sent only
+ * the bare command byte for zero-length commands; the vendor SPI transport
+ * always writes the full 3-byte header, so do the same here.
+ *
+ * TODO(hw-verify): confirm on the S3910 that the two length bytes are
+ * required (or at least harmless) on SPI.
+ */
 static int tcm_send_cmd_noargs(struct tcm_data *tcm, u8 cmd)
 {
-	struct tcm_cmd c = {
-		.cmd = cmd,
-		.length = 0,
-	};
+	dev_dbg(&tcm->spi->dev, "sending command %#x\n", cmd);
 
-	return tcm_send_cmd(tcm, &c);
+	tcm->tx_cmd[0] = cmd;
+	tcm->tx_cmd[1] = 0;
+	tcm->tx_cmd[2] = 0;
+
+	return spi_write(tcm->spi, tcm->tx_cmd, 3);
 }
 
 static int tcm_recv_report(struct tcm_data *tcm,
 			   void *buf, size_t length)
 {
-	struct i2c_client *client = tcm->client;
-	struct i2c_msg msg;
-	int ret;
+	struct spi_transfer xfer = {
+		.tx_buf = tcm->tx_fill,
+		.rx_buf = buf,
+		.len = length,
+	};
 
-	msg.addr = client->addr;
-	msg.flags = I2C_M_RD;
-	msg.len = length;
-	msg.buf = buf;
+	if (WARN_ON(length > TCM_BUF_SIZE))
+		return -EINVAL;
 
-	ret = i2c_transfer(client->adapter, &msg, 1);
-	if (ret == 1)
-		return 0;
-	else if (ret < 0)
-		return ret;
-	else
-		return -EIO;
+	/*
+	 * TODO(hw-verify): the vendor driver optionally inserts a per-byte
+	 * delay (synaptics,byte-delay-us) between single-byte transfers.
+	 * The downstream infiniti DT was not seen setting one, so a single
+	 * transfer is used here. Revisit if reads come back corrupted.
+	 */
+	return spi_sync_transfer(tcm->spi, &xfer, 1);
 }
 
 static int tcm_read_message(struct tcm_data *tcm, u8 cmd, void *buf, size_t length)
@@ -204,7 +195,7 @@ static int tcm_read_message(struct tcm_data *tcm, u8 cmd, void *buf, size_t leng
 
 	if (buf) {
 		if (length > tcm->buf_size) {
-			dev_warn(&tcm->client->dev, "expected %zu bytes, got %u\n",
+			dev_warn(&tcm->spi->dev, "expected %zu bytes, got %u\n",
 				 length, tcm->buf_size);
 		}
 		length = min(tcm->buf_size, length);
@@ -218,7 +209,7 @@ static void tcm_power_off(void *data)
 {
 	struct tcm_data *tcm = data;
 
-	disable_irq(tcm->client->irq);
+	disable_irq(tcm->spi->irq);
 	regulator_bulk_disable(ARRAY_SIZE(tcm->supplies), tcm->supplies);
 }
 
@@ -226,7 +217,7 @@ static int tcm_input_open(struct input_dev *dev)
 {
 	struct tcm_data *tcm = input_get_drvdata(dev);
 
-	return i2c_smbus_write_byte(tcm->client, TCM_ENABLE_REPORT);
+	return tcm_send_cmd_noargs(tcm, TCM_ENABLE_REPORT);
 }
 
 static void tcm_input_close(struct input_dev *dev)
@@ -234,104 +225,132 @@ static void tcm_input_close(struct input_dev *dev)
 	struct tcm_data *tcm = input_get_drvdata(dev);
 	int ret;
 
-	ret = i2c_smbus_write_byte(tcm->client, TCM_DISABLE_REPORT);
+	ret = tcm_send_cmd_noargs(tcm, TCM_DISABLE_REPORT);
 	if (ret)
-		dev_err(&tcm->client->dev, "failed to turn off sensing\n");
+		dev_err(&tcm->spi->dev, "failed to turn off sensing\n");
 }
 
 /*
- * The default report config looks like this:
+ * REPORT_TOUCH (0x11) payload layout as observed on the S3910 (OnePlus 15),
+ * reverse-engineered from live single-finger captures (2026-07-21):
  *
- * a5 01 80 00 11 08 1e 08 0f 01 04 01 06 04 07 04
- * 08 0c 09 0c 0a 08 0b 08 0c 08 0d 10 0e 10 03 00
- * 00 00
+ *   a5 11 2b 00                                  header, payload length 43
+ *   00 x 31                                      frame-level data, offset 0..30
+ *                                                (all zero in the captures;
+ *                                                per the TCM report config
+ *                                                these are frame fields such
+ *                                                as gesture data / timestamp
+ *                                                that precede the object loop)
+ *   10 | c5 15 | 7d 56 | 09 | 90 | 00 x 5        one 12-byte object record
  *
- * a5 01 80 00 - HEADER + length
+ * Object record fields, matching the vendor TCM parser's field codes
+ * (TOUCH_OBJECT_N_INDEX 4 bits, then _CLASSIFICATION 4 bits, LSB-first,
+ * so index sits in the low nibble):
  *
- * 11 08 - TOUCH_FRAME_RATE (8 bits)
- * 30 08 - UNKNOWN (8 bits)
- * 0f 01 - TOUCH_0D_BUTTONS_STATE (1 bit)
- * 04 01 - TOUCH_PAD_TO_NEXT_BYTE (7 bits - padding)
- * 06 04 - TOUCH_OBJECT_N_INDEX (4 bits)
- * 07 04 - TOUCH_OBJECT_N_CLASSIFICATION (4 bits)
- * 08 0c - TOUCH_OBJECT_N_X_POSITION (12 bits)
- * 09 0c - TOUCH_OBJECT_N_Y_POSITION (12 bits)
- * 0a 08 - TOUCH_OBJECT_N_Z (8 bits)
- * 0b 08 - TOUCH_OBJECT_N_X_WIDTH (8 bits)
- * 0c 08 - TOUCH_OBJECT_N_Y_WIDTH (8 bits)
- * 0d 10 - TOUCH_OBJECT_N_TX_POSITION_TIXELS (16 bits) ??
- * 0e 10 - TOUCH_OBJECT_N_RX_POSITION_TIXELS (16 bits) ??
- * 03 00 - TOUCH_FOREACH_END (0 bits)
- * 00 00 - TOUCH_END (0 bits)
+ *   +0       index : 4, classification : 4   (0x10 = index 0, FINGER)
+ *   +1 .. 2  X, little-endian 16             (0 .. max_x, 12719 on this unit)
+ *   +3 .. 4  Y, little-endian 16             (0 .. max_y, 27719 on this unit)
+ *   +5       Z                               (0x07..0x0a observed)
+ *   +6       width-related                   (0x70..0xa0 observed; exact
+ *                                            sub-layout not yet known)
+ *   +7 .. 11 zero in all captures            (presumably more width/tx/rx)
  *
- * Since we only support this report config, we just hardcode the format below.
- * To support additional report configs, we would need to parse the config and
- * use it to parse the reports dynamically.
+ * Observed payload lengths: 31 (no active object), 43 (one), 55 (two) --
+ * i.e. 31 frame bytes plus 12 bytes per active object. This is consistent
+ * with a report config using TOUCH_FOREACH_ACTIVE_OBJECT (the config itself
+ * has not been read out of the chip): only active objects are present and
+ * the object count follows from the payload length. Only the one-object
+ * form has been captured raw so far; the 55 = two-object reading is an
+ * arithmetic inference from the length histogram.
+ *
+ * This is hardcoded for the report config the S3910 ships with. To support
+ * other configs we would need to read the config and parse dynamically.
  */
 
-struct tcm_report_point {
-	u8 unknown;
-	u8 buttons;
-	__le32 point; /* idx : 4, class : 4, x : 12, y : 12 */
-	// u8 idx : 4;
-	// u8 classification : 4;
-	// u16 x : 12;
-	// u16 y : 12;
+#define TCM_TOUCH_FRAME_BYTES		31
+
+/* classification (HIGH nibble of an object record's first byte) values */
+#define TCM_OBJ_CLASS_NO_OBJECT		0
+
+/* must match input_mt_init_slots() in tcm_probe() */
+#define TCM_MAX_OBJECTS			10
+
+struct tcm_report_object {
+	u8 desc; /* index : 4, classification : 4 */
+	__le16 x;
+	__le16 y;
 	u8 z;
-	u8 width_x;
-	u8 width_y;
-	u8 tx;
-	u8 rx;
+	u8 width; /* sub-layout unknown, see comment above */
+	u8 unknown[5];
 } __packed;
+
+static_assert(sizeof(struct tcm_report_object) == 12);
 
 static int tcm_handle_touch_report(struct tcm_data *tcm, const char *buf, size_t len)
 {
-	const struct tcm_report_point *point;
+	const struct tcm_report_object *obj;
+	size_t num_objects;
+
 	/* If the input device hasn't registered yet then we can't do anything */
 	if (!tcm->input)
+		return 0;
+
+	if (len < sizeof(struct tcm_message_header))
 		return 0;
 
 	buf += sizeof(struct tcm_message_header);
 	len -= sizeof(struct tcm_message_header);
 
-	dev_dbg(&tcm->client->dev, "touch report len %zu\n", len);
-	if ((len - 3) % sizeof(*point))
-		dev_err(&tcm->client->dev, "invalid touch report length\n");
+	dev_dbg(&tcm->spi->dev, "touch report len %zu\n", len);
+	if (len < TCM_TOUCH_FRAME_BYTES ||
+	    (len - TCM_TOUCH_FRAME_BYTES) % sizeof(*obj)) {
+		dev_err_ratelimited(&tcm->spi->dev,
+				    "invalid touch report length %zu\n", len);
+		return 0;
+	}
 
-	buf++; /* Skip the FPS report */
+	num_objects = (len - TCM_TOUCH_FRAME_BYTES) / sizeof(*obj);
+	buf += TCM_TOUCH_FRAME_BYTES;
 
 	/* We don't need to report releases because we have INPUT_MT_DROP_UNUSED */
-	for (int i = 0; i < (len - 1) / sizeof(*point); i++) {
-		u8 major_width, minor_width;
-		u16 idx, x, y;
-		u32 _point;
+	for (size_t i = 0; i < num_objects; i++) {
+		u8 idx, classification;
+		u16 x, y;
 
-		point = (struct tcm_report_point *)buf;
-		_point = le32_to_cpu(point->point);
+		obj = (const struct tcm_report_object *)buf;
+		buf += sizeof(*obj);
 
-		minor_width = point->width_x;
-		major_width = point->width_y;
+		idx = obj->desc & 0xf;
+		classification = obj->desc >> 4;
+		x = le16_to_cpu(obj->x);
+		y = le16_to_cpu(obj->y);
 
-		if (minor_width > major_width)
-			swap(major_width, minor_width);
+		dev_dbg(&tcm->spi->dev,
+			"touch report: idx %u class %u x %u y %u z %u w %#x\n",
+			idx, classification, x, y, obj->z, obj->width);
 
-		idx = _point & 0xf;
-		x = (_point >> 8) & 0xfff;
-		y = (_point >> 20) & 0xfff;
+		if (classification == TCM_OBJ_CLASS_NO_OBJECT)
+			continue;
 
-		dev_dbg(&tcm->client->dev, "touch report: idx %u x %u y %u\n",
-			idx, x, y);
+		/*
+		 * The index field is 4 bits but only TCM_MAX_OBJECTS slots
+		 * exist; an out-of-range slot would silently land events on
+		 * the previously addressed slot.
+		 */
+		if (idx >= TCM_MAX_OBJECTS)
+			continue;
 
 		input_mt_slot(tcm->input, idx);
 		input_mt_report_slot_state(tcm->input, MT_TOOL_FINGER, true);
 
 		touchscreen_report_pos(tcm->input, &tcm->props, x, y, true);
 
-		input_report_abs(tcm->input, ABS_MT_TOUCH_MAJOR, major_width);
-		input_report_abs(tcm->input, ABS_MT_TOUCH_MINOR, minor_width);
-		input_report_abs(tcm->input, ABS_MT_PRESSURE, point->z);
-
-		buf += sizeof(*point);
+		/*
+		 * The width byte's sub-layout is not understood yet, so
+		 * ABS_MT_TOUCH_MAJOR/MINOR are not reported; the debug print
+		 * above keeps collecting evidence.
+		 */
+		input_report_abs(tcm->input, ABS_MT_PRESSURE, obj->z);
 	}
 
 	input_mt_sync_frame(tcm->input);
@@ -344,14 +363,14 @@ static irqreturn_t tcm_report_irq(int irq, void *data)
 {
 	struct tcm_data *tcm = data;
 	struct tcm_message_header *header;
-	char buf[256];
+	u8 *buf = tcm->rx_buf;
 	u16 len;
 	int ret;
 
 	header = (struct tcm_message_header *)buf;
-	ret = tcm_recv_report(tcm, buf, sizeof(buf));
+	ret = tcm_recv_report(tcm, buf, TCM_BUF_SIZE);
 	if (ret) {
-		dev_err(&tcm->client->dev, "failed to read report: %d\n", ret);
+		dev_err(&tcm->spi->dev, "failed to read report: %d\n", ret);
 		return IRQ_HANDLED;
 	}
 
@@ -365,18 +384,18 @@ static irqreturn_t tcm_report_irq(int irq, void *data)
 	case REPORT_TOUCH_HOLD:
 		break;
 	default:
-		dev_dbg(&tcm->client->dev, "Ignoring report %#x\n", header->code);
+		dev_dbg(&tcm->spi->dev, "Ignoring report %#x\n", header->code);
 		return IRQ_HANDLED;
 	}
 
-	len = le32_to_cpu(header->length);
+	len = le16_to_cpu(header->length);
 
-	dev_dbg(&tcm->client->dev, "report %#x len %u\n", header->code, len);
+	dev_dbg(&tcm->spi->dev, "report %#x len %u\n", header->code, len);
 	print_hex_dump_bytes("report: ", DUMP_PREFIX_OFFSET, buf,
-			     min(sizeof(buf), len + sizeof(*header)));
+			     min_t(size_t, TCM_BUF_SIZE, len + sizeof(*header)));
 
-	if (len > sizeof(buf) - sizeof(*header)) {
-		dev_err(&tcm->client->dev, "report too long\n");
+	if (len > TCM_BUF_SIZE - sizeof(*header)) {
+		dev_err(&tcm->spi->dev, "report too long\n");
 		return IRQ_HANDLED;
 	}
 
@@ -384,7 +403,7 @@ static irqreturn_t tcm_report_irq(int irq, void *data)
 	 * (user touched the screen) we just parse the report directly.
 	 */
 	if (completion_done(&tcm->response) && header->code == REPORT_TOUCH) {
-		tcm_handle_touch_report(tcm, buf, len + sizeof(*header));
+		tcm_handle_touch_report(tcm, (const char *)buf, len + sizeof(*header));
 		return IRQ_HANDLED;
 	}
 
@@ -408,15 +427,15 @@ static int tcm_hw_init(struct tcm_data *tcm, u16 *max_x, u16 *max_y)
 	 */
 	ret = tcm_read_message(tcm, TCM_RUN_APPLICATION_FIRMWARE, &id, sizeof(id));
 	if (ret) {
-		dev_err(&tcm->client->dev, "failed to identify device: %d\n", ret);
+		dev_err(&tcm->spi->dev, "failed to identify device: %d\n", ret);
 		return ret;
 	}
 
-	dev_dbg(&tcm->client->dev, "Synaptics TCM %s v%d mode %d\n",
+	dev_dbg(&tcm->spi->dev, "Synaptics TCM %s v%d mode %d\n",
 		id.part_number, id.version, id.mode);
 	if (id.mode != MODE_APPLICATION) {
 		/* We don't support firmware updates or anything else */
-		dev_err(&tcm->client->dev, "Device is not in application mode\n");
+		dev_err(&tcm->spi->dev, "Device is not in application mode\n");
 		return -ENODEV;
 	}
 
@@ -424,15 +443,15 @@ static int tcm_hw_init(struct tcm_data *tcm, u16 *max_x, u16 *max_y)
 		msleep(20);
 		ret = tcm_read_message(tcm, TCM_GET_APPLICATION_INFO, &app_info, sizeof(app_info));
 		if (ret) {
-			dev_err(&tcm->client->dev, "failed to get application info: %d\n", ret);
+			dev_err(&tcm->spi->dev, "failed to get application info: %d\n", ret);
 			return ret;
 		}
 		status = le16_to_cpu(app_info.status);
 	} while (status == APP_STATUS_BOOTING || status == APP_STATUS_UPDATING);
 
-	dev_dbg(&tcm->client->dev, "Application firmware v%d.%d (customer '%s') status %d\n",
-		 app_info.version[0], app_info.version[1], app_info.customer_config_id,
-		 status);
+	dev_dbg(&tcm->spi->dev, "Application firmware v%d.%d (customer '%s') status %d\n",
+		app_info.version[0], app_info.version[1], app_info.customer_config_id,
+		status);
 
 	*max_x = le16_to_cpu(app_info.max_x);
 	*max_y = le16_to_cpu(app_info.max_y);
@@ -457,36 +476,42 @@ static int tcm_power_on(struct tcm_data *tcm)
 	return 0;
 }
 
-static int tcm_probe(struct i2c_client *client)
+static int tcm_probe(struct spi_device *spi)
 {
+	struct device *dev = &spi->dev;
 	struct tcm_data *tcm;
 	u16 max_x, max_y;
 	int ret;
 
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C |
-						I2C_FUNC_SMBUS_BYTE_DATA |
-						I2C_FUNC_SMBUS_I2C_BLOCK))
-		return -ENODEV;
-
-	tcm = devm_kzalloc(&client->dev, sizeof(struct tcm_data), GFP_KERNEL);
+	tcm = devm_kzalloc(dev, sizeof(struct tcm_data), GFP_KERNEL);
 	if (!tcm)
 		return -ENOMEM;
 
-	i2c_set_clientdata(client, tcm);
-	tcm->client = client;
+	spi_set_drvdata(spi, tcm);
+	tcm->spi = spi;
+
+	tcm->tx_fill = devm_kmalloc(dev, TCM_BUF_SIZE, GFP_KERNEL);
+	tcm->rx_buf = devm_kmalloc(dev, TCM_BUF_SIZE, GFP_KERNEL);
+	tcm->tx_cmd = devm_kmalloc(dev, 3, GFP_KERNEL);
+	if (!tcm->tx_fill || !tcm->rx_buf || !tcm->tx_cmd)
+		return -ENOMEM;
+	memset(tcm->tx_fill, 0xff, TCM_BUF_SIZE);
 
 	init_completion(&tcm->response);
 
 	tcm->supplies[0].supply = "vdd";
 	tcm->supplies[1].supply = "vcc";
-	ret = devm_regulator_bulk_get(&client->dev, ARRAY_SIZE(tcm->supplies),
+	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(tcm->supplies),
 				      tcm->supplies);
 	if (ret)
 		return ret;
 
-	tcm->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_LOW);
+	tcm->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(tcm->reset_gpio))
+		return dev_err_probe(dev, PTR_ERR(tcm->reset_gpio),
+				     "failed to get reset gpio\n");
 
-	ret = devm_add_action_or_reset(&client->dev, tcm_power_off,
+	ret = devm_add_action_or_reset(dev, tcm_power_off,
 				       tcm);
 	if (ret)
 		return ret;
@@ -495,7 +520,7 @@ static int tcm_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
-	ret = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+	ret = devm_request_threaded_irq(dev, spi->irq, NULL,
 					tcm_report_irq,
 					IRQF_ONESHOT,
 					"synaptics_tcm_report", tcm);
@@ -504,28 +529,34 @@ static int tcm_probe(struct i2c_client *client)
 
 	ret = tcm_hw_init(tcm, &max_x, &max_y);
 	if (ret) {
-		dev_err(&client->dev, "failed to initialize hardware\n");
+		dev_err(dev, "failed to initialize hardware\n");
 		return ret;
 	}
 
-	tcm->input = devm_input_allocate_device(&client->dev);
+	tcm->input = devm_input_allocate_device(dev);
 	if (!tcm->input)
 		return -ENOMEM;
 
 	tcm->input->name = "Synaptics TCM Oncell Touchscreen";
-	tcm->input->id.bustype = BUS_I2C;
+	tcm->input->id.bustype = BUS_SPI;
 	tcm->input->open = tcm_input_open;
 	tcm->input->close = tcm_input_close;
 
 	input_set_abs_params(tcm->input, ABS_MT_POSITION_X, 0, max_x, 0, 0);
 	input_set_abs_params(tcm->input, ABS_MT_POSITION_Y, 0, max_y, 0, 0);
+	/*
+	 * MAJOR/MINOR are declared but not currently reported: the S3910
+	 * record's width sub-layout is not understood yet (see the report
+	 * layout comment above tcm_handle_touch_report()).
+	 */
 	input_set_abs_params(tcm->input, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
 	input_set_abs_params(tcm->input, ABS_MT_TOUCH_MINOR, 0, 255, 0, 0);
 	input_set_abs_params(tcm->input, ABS_MT_PRESSURE, 0, 255, 0, 0);
 
 	touchscreen_parse_properties(tcm->input, true, &tcm->props);
 
-	ret = input_mt_init_slots(tcm->input, 10, INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
+	ret = input_mt_init_slots(tcm->input, TCM_MAX_OBJECTS,
+				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
 	if (ret)
 		return ret;
 
@@ -539,33 +570,42 @@ static int tcm_probe(struct i2c_client *client)
 }
 
 static const struct of_device_id syna_driver_ids[] = {
+	/*
+	 * Note: the S3908 (OnePlus 8T) sits on I2C; the upstream v2 series
+	 * this driver derives from is an I2C driver. This tree carries an
+	 * SPI conversion for the S3910 (OnePlus 15), so the s3908 entry is
+	 * only kept for reference until the transport is abstracted (e.g.
+	 * via regmap) to support both buses.
+	 */
 	{
 		.compatible = "syna,s3908",
+	},
+	{
+		.compatible = "syna,s3910",
 	},
 	{}
 };
 MODULE_DEVICE_TABLE(of, syna_driver_ids);
 
-static const struct i2c_device_id syna_i2c_ids[] = {
-	{ "synaptics-tcm", 0 },
+static const struct spi_device_id syna_spi_ids[] = {
+	{ "s3908" },
+	{ "s3910" },
 	{ }
 };
+MODULE_DEVICE_TABLE(spi, syna_spi_ids);
 
-MODULE_DEVICE_TABLE(i2c, syna_i2c_ids);
-
-static struct i2c_driver syna_i2c_driver = {
+static struct spi_driver syna_spi_driver = {
 	.probe		= tcm_probe,
-	.id_table	= syna_i2c_ids,
+	.id_table	= syna_spi_ids,
 	.driver		= {
-	.name		= "synaptics-tcm",
-	.of_match_table	= syna_driver_ids,
+		.name		= "synaptics-tcm",
+		.of_match_table	= syna_driver_ids,
 	},
 };
 
-module_i2c_driver(syna_i2c_driver);
+module_spi_driver(syna_spi_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Frieder Hannenheim <frieder.hannenheim@proton.me>");
 MODULE_AUTHOR("Caleb Connolly <caleb@postmarketos.org>");
 MODULE_DESCRIPTION("A driver for Synaptics TCM Oncell Touchpanels");
-
