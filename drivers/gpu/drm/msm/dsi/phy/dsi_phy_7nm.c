@@ -96,6 +96,7 @@ struct dsi_pll_7nm {
 	 */
 	spinlock_t pll_enable_lock;
 	int pll_enable_cnt;
+	bool vco_configured;
 
 	struct pll_7nm_cached_state cached_state;
 
@@ -372,6 +373,8 @@ static int dsi_pll_7nm_vco_set_rate(struct clk_hw *hw, unsigned long rate,
 	/* flush, ensure all register writes are done*/
 	wmb();
 
+	pll_7nm->vco_configured = true;
+
 	return 0;
 }
 
@@ -496,6 +499,9 @@ static int dsi_pll_7nm_vco_prepare(struct clk_hw *hw)
 	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
 	int rc;
 
+	if (!pll_7nm->vco_configured)
+		return 0;
+
 	dsi_pll_enable_pll_bias(pll_7nm);
 	if (pll_7nm->slave)
 		dsi_pll_enable_pll_bias(pll_7nm->slave);
@@ -548,6 +554,9 @@ static void dsi_pll_disable_sub(struct dsi_pll_7nm *pll)
 static void dsi_pll_7nm_vco_unprepare(struct clk_hw *hw)
 {
 	struct dsi_pll_7nm *pll_7nm = to_pll_7nm(hw);
+
+	if (!pll_7nm->phy->pll_on)
+		return;
 
 	/*
 	 * To avoid any stray glitches while abruptly powering down the PLL
