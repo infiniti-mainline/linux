@@ -15,6 +15,7 @@ properties:
   compatible:
     enum:
       - qcom,wcn7850-bt
+      - qcom,wcn7860-bt
 
   enable-gpios:
     maxItems: 1
