@@ -17,6 +17,7 @@ properties:
   compatible:
     enum:
       - pci17cb,1107  # WCN7850
+      - pci17cb,110e  # WCN7860
 
   reg:
     maxItems: 1
