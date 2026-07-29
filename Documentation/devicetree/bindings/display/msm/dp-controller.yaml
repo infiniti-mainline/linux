@@ -68,6 +68,7 @@ properties:
       - items:
           - enum:
               - qcom,eliza-dp
+              - qcom,kaanapali-dp
               - qcom,sm8750-dp
           - const: qcom,sm8650-dp
 
