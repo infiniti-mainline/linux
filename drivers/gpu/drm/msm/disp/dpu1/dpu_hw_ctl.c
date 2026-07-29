@@ -657,6 +657,19 @@ static void dpu_hw_ctl_intf_cfg(struct dpu_hw_ctl *ctx,
 	DPU_REG_WRITE(c, CTL_TOP, intf_cfg);
 }
 
+static void dpu_hw_ctl_clear_intf_cfg_v1(struct dpu_hw_ctl *ctx)
+{
+	struct dpu_hw_blk_reg_map *c = &ctx->hw;
+
+	DPU_REG_WRITE(c, CTL_INTF_ACTIVE, 0);
+	DPU_REG_WRITE(c, CTL_INTF_MASTER, 0);
+	DPU_REG_WRITE(c, CTL_WB_ACTIVE, 0);
+	DPU_REG_WRITE(c, CTL_CWB_ACTIVE, 0);
+	DPU_REG_WRITE(c, CTL_DSC_ACTIVE, 0);
+	DPU_REG_WRITE(c, CTL_MERGE_3D_ACTIVE, 0);
+	DPU_REG_WRITE(c, CTL_CDM_ACTIVE, 0);
+}
+
 static void dpu_hw_ctl_reset_intf_cfg_v1(struct dpu_hw_ctl *ctx,
 		struct dpu_hw_intf_cfg *cfg)
 {
@@ -819,6 +832,7 @@ struct dpu_hw_ctl *dpu_hw_ctl_init(struct drm_device *dev,
 		c->ops.trigger_flush = dpu_hw_ctl_trigger_flush_v1;
 		c->ops.setup_intf_cfg = dpu_hw_ctl_intf_cfg_v1;
 		c->ops.reset_intf_cfg = dpu_hw_ctl_reset_intf_cfg_v1;
+		c->ops.clear_intf_cfg = dpu_hw_ctl_clear_intf_cfg_v1;
 		c->ops.update_pending_flush_intf =
 			dpu_hw_ctl_update_pending_flush_intf_v1;
 

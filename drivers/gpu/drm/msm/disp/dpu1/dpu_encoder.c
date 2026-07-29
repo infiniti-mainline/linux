@@ -1358,6 +1358,10 @@ static void dpu_encoder_virt_atomic_enable(struct drm_encoder *drm_enc,
 	trace_dpu_enc_enable(DRMID(drm_enc), cur_mode->hdisplay,
 			     cur_mode->vdisplay);
 
+	if (dpu_enc->cur_master && dpu_enc->cur_master->hw_ctl &&
+	    dpu_enc->cur_master->hw_ctl->ops.clear_intf_cfg)
+		dpu_enc->cur_master->hw_ctl->ops.clear_intf_cfg(dpu_enc->cur_master->hw_ctl);
+
 	/* always enable slave encoder before master */
 	if (dpu_enc->cur_slave && dpu_enc->cur_slave->ops.enable)
 		dpu_enc->cur_slave->ops.enable(dpu_enc->cur_slave);

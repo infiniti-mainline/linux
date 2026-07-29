@@ -241,6 +241,12 @@ struct dpu_hw_ctl_ops {
 			struct dpu_hw_intf_cfg *cfg);
 
 	/**
+	 * @clear_intf_cfg: clear all ctl_path interface bindings
+	 * @ctx    : ctl path ctx pointer
+	 */
+	void (*clear_intf_cfg)(struct dpu_hw_ctl *ctx);
+
+	/**
 	 * @reset: reset function for this ctl type
 	 */
 	int (*reset)(struct dpu_hw_ctl *c);
