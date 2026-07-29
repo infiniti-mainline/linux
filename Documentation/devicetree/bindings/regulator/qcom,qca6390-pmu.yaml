@@ -27,6 +27,7 @@ properties:
           - qcom,wcn6750-pmu
           - qcom,wcn6855-pmu
           - qcom,wcn7850-pmu
+          - qcom,wcn7860-pmu
 
   vdd-supply:
     description: VDD supply regulator handle
@@ -36,6 +37,12 @@ properties:
 
   vddasd-supply:
     description: VDD_ASD supply regulator handle
+
+  vddant-supply:
+    description: VDD antenna-share supply regulator handle
+
+  vddcx-supply:
+    description: VDD_CX supply regulator handle
 
   vdddig-supply:
     description: VDD_DIG supply regulator handle
@@ -180,6 +187,20 @@ allOf:
         - vddio-supply
         - vddaon-supply
         - vdddig-supply
+        - vddrfa1p2-supply
+        - vddrfa1p8-supply
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,wcn7860-pmu
+    then:
+      required:
+        - vddant-supply
+        - vddaon-supply
+        - vddcx-supply
+        - vdddig-supply
+        - vddio1p2-supply
         - vddrfa1p2-supply
         - vddrfa1p8-supply
 
