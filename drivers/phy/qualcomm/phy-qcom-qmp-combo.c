@@ -4260,15 +4260,10 @@ static int qmp_combo_usb_power_on(struct phy *phy)
 			PHY_INIT_COMPLETE_TIMEOUT);
 	if (ret) {
 		dev_err(qmp->dev, "phy initialization timed-out\n");
-		goto err_disable_pipe_clk;
+		return ret;
 	}
 
 	return 0;
-
-err_disable_pipe_clk:
-	clk_disable_unprepare(qmp->pipe_clk);
-
-	return ret;
 }
 
 static int qmp_combo_usb_power_off(struct phy *phy)
