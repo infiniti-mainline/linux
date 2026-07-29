@@ -197,6 +197,7 @@ struct wcd939x_usbss {
 	enum typec_orientation orientation;
 	unsigned long mode;
 	unsigned int svid;
+	bool dp_active;
 };
 
 static const struct regmap_range_cfg wcd939x_usbss_ranges[] = {
@@ -255,6 +256,7 @@ static int wcd939x_usbss_set(struct wcd939x_usbss *usbss)
 		/* DP Only */
 		case TYPEC_DP_STATE_C:
 		case TYPEC_DP_STATE_E:
+			enable_usb = true;
 			enable_dp = true;
 			break;
 
@@ -561,6 +563,16 @@ static int wcd939x_usbss_mux_set(struct typec_mux_dev *mux,
 	int ret = 0;
 
 	mutex_lock(&usbss->lock);
+
+	if (state->alt && state->alt->svid == USB_TYPEC_DP_SID) {
+		usbss->dp_active = true;
+	} else if (state->mode == TYPEC_STATE_SAFE) {
+		usbss->dp_active = false;
+	} else if (state->mode == TYPEC_STATE_USB && usbss->dp_active) {
+		/* Keep the SBU switches carrying DP AUX */
+		mutex_unlock(&usbss->lock);
+		return 0;
+	}
 
 	if (usbss->mode != state->mode) {
 		usbss->mode = state->mode;
