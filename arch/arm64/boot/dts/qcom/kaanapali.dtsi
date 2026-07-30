@@ -7006,11 +7006,9 @@
 		};
 
 		sram@14680000 {
-			compatible = "qcom,kaanapali-imem", "mmio-sram";
+			compatible = "qcom,kaanapali-imem", "syscon", "simple-mfd";
 			reg = <0x0 0x14680000 0x0 0x1000>;
 			ranges = <0x0 0x0 0x14680000 0x1000>;
-
-			no-memory-wc;
 
 			#address-cells = <1>;
 			#size-cells = <1>;
@@ -7022,6 +7020,14 @@
 			pil-sram@94c {
 				compatible = "qcom,pil-reloc-info";
 				reg = <0x94c 0xc8>;
+			};
+
+			reboot-mode {
+				compatible = "syscon-reboot-mode";
+				offset = <0x65c>;
+				mode-normal = <0x0>;
+				mode-bootloader = <0x77665501>;
+				mode-recovery = <0x77665502>;
 			};
 		};
 
