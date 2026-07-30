@@ -1836,7 +1836,11 @@ static int msm_dp_ctrl_enable_mainlink_clocks(struct msm_dp_ctrl_private *ctrl,
 	ctrl->phy_opts.dp.ssc = drm_dp_max_downspread(dpcd);
 
 	phy_configure(phy, &ctrl->phy_opts);
-	phy_power_on(phy);
+	ret = phy_power_on(phy);
+	if (ret) {
+		DRM_ERROR("DP PHY power on failed. ret=%d\n", ret);
+		return ret;
+	}
 
 	dev_pm_opp_set_rate(ctrl->dev, ctrl->link->link_params.rate * 1000);
 	ret = msm_dp_ctrl_link_clk_enable(&ctrl->msm_dp_ctrl);
@@ -2322,8 +2326,11 @@ static bool msm_dp_ctrl_channel_eq_ok(struct msm_dp_ctrl_private *ctrl)
 {
 	u8 link_status[DP_LINK_STATUS_SIZE];
 	int num_lanes = ctrl->link->link_params.num_lanes;
+	int ret;
 
-	drm_dp_dpcd_read_link_status(ctrl->aux, link_status);
+	ret = drm_dp_dpcd_read_link_status(ctrl->aux, link_status);
+	if (ret)
+		return false;
 
 	return drm_dp_channel_eq_ok(link_status, num_lanes);
 }
