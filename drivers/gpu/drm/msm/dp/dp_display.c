@@ -416,6 +416,8 @@ static int msm_dp_hpd_plug_handle(struct msm_dp_display_private *dp)
 			dp->link->sink_count);
 
 	guard(mutex)(&dp->plugged_lock);
+	if (dp->plugged)
+		return 0;
 
 	ret = pm_runtime_resume_and_get(&pdev->dev);
 	if (ret) {
@@ -642,6 +644,11 @@ static int msm_dp_display_prepare_link(struct msm_dp_display_private *dp)
 
 	if (dp->link->sink_count == 0)
 		return -ENOTCONN;
+
+	if (!dp->plugged)
+		return -ENOTCONN;
+
+	msm_dp_aux_enable_xfers(dp->aux, true);
 
 	if (!msm_dp_display->power_on) {
 		msm_dp_display_host_phy_init(dp);
