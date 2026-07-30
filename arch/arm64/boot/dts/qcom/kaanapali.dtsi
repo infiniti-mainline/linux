@@ -441,7 +441,7 @@
 		};
 
 		adspslpi_mem: adspslpi@a1400000 {
-			reg = <0x0 0xa1400000 0x0 0x4c00000>;
+			reg = <0x0 0xa1400000 0x0 0x5000000>;
 			no-map;
 		};
 
