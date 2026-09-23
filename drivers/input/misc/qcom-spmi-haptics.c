@@ -1159,6 +1159,7 @@ static int qcom_haptics_probe(struct platform_device *pdev)
 
 	input_set_capability(input, EV_FF, FF_CONSTANT);
 	input_set_capability(input, EV_FF, FF_PERIODIC);
+	input_set_capability(input, EV_FF, FF_SINE);
 	input_set_capability(input, EV_FF, FF_CUSTOM);
 	input_set_capability(input, EV_FF, FF_GAIN);
 
