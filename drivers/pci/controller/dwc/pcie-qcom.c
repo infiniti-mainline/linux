@@ -1798,6 +1798,22 @@ static int qcom_pcie_set_max_opp(struct device *dev)
 	return ret;
 }
 
+static int qcom_pcie_set_min_opp(struct device *dev)
+{
+	unsigned long min_freq = 0;
+	struct dev_pm_opp *opp;
+	int ret;
+
+	opp = dev_pm_opp_find_freq_ceil(dev, &min_freq);
+	if (IS_ERR(opp))
+		return PTR_ERR(opp);
+
+	ret = dev_pm_opp_set_opp(dev, opp);
+	dev_pm_opp_put(opp);
+
+	return ret;
+}
+
 /*
  * Qcom PCIe controllers only support one Root Port per controller instance. So
  * this function ignores the 'pci_dev' associated with the Root Port and just
@@ -2412,6 +2428,12 @@ static int qcom_pcie_suspend_noirq(struct device *dev)
 					ret);
 				return ret;
 			}
+		} else if (pcie->use_pm_opp) {
+			ret = qcom_pcie_set_min_opp(dev);
+			if (ret) {
+				dev_err(dev, "Failed to set minimum OPP: %d\n", ret);
+				return ret;
+			}
 		}
 
 		/*
@@ -2425,9 +2447,6 @@ static int qcom_pcie_suspend_noirq(struct device *dev)
 			if (ret)
 				dev_err(dev, "Failed to disable CPU-PCIe interconnect path: %d\n",
 					ret);
-
-			if (pcie->use_pm_opp)
-				dev_pm_opp_set_opp(pcie->pci->dev, NULL);
 		}
 	}
 	return ret;
