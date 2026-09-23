@@ -268,6 +268,9 @@ int msm_drm_kms_init(struct device *dev, const struct drm_driver *drv)
 	struct drm_crtc *crtc;
 	int ret;
 
+	/* While the firmware framebuffer still keeps the display powered */
+	msm_mdss_take_over_splash(dev->parent);
+
 	/* the fw fb could be anywhere in memory */
 	ret = aperture_remove_all_conflicting_devices(drv->name);
 	if (ret)

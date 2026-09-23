@@ -10,7 +10,9 @@
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/dma-buf.h>
+#include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/pm_opp.h>
 
@@ -1517,6 +1519,49 @@ static const struct of_device_id dpu_dt_match[] = {
 	{}
 };
 MODULE_DEVICE_TABLE(of, dpu_dt_match);
+
+/* Check for, or stop, a bootloader splash screen running on autorefresh */
+bool dpu_boot_splash(struct device *mdss, bool stop)
+{
+	const struct of_device_id *match = NULL;
+	const struct dpu_mdss_cfg *catalog;
+	void __iomem *mmio = NULL;
+	struct device_node *np;
+	bool running = false;
+	int i;
+
+	for_each_available_child_of_node(mdss->of_node, np) {
+		match = of_match_node(dpu_dt_match, np);
+		if (match)
+			break;
+	}
+	if (!match)
+		return false;
+
+	catalog = match->data;
+	i = of_property_match_string(np, "reg-names", "mdp");
+
+	if (catalog->mdss_ver->core_major_ver >= 5 && i >= 0)
+		mmio = of_iomap(np, i);
+
+	of_node_put(np);
+	if (!mmio)
+		return false;
+
+	for (i = 0; i < catalog->intf_count; i++) {
+		if (catalog->intf[i].type == INTF_DSI)
+			running |= dpu_hw_intf_boot_autorefresh(mmio + catalog->intf[i].base,
+								stop);
+	}
+
+	iounmap(mmio);
+
+	/* One frame at 50 Hz */
+	if (running && stop)
+		msleep(20);
+
+	return running;
+}
 
 static struct platform_driver dpu_driver = {
 	.probe = dpu_dev_probe,

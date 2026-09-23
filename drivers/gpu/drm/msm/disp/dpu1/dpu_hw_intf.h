@@ -132,4 +132,6 @@ struct dpu_hw_intf *dpu_hw_intf_init(struct drm_device *dev,
 				     void __iomem *addr,
 				     const struct dpu_mdss_version *mdss_rev);
 
+bool dpu_hw_intf_boot_autorefresh(void __iomem *addr, bool stop);
+
 #endif /*_DPU_HW_INTF_H */

@@ -587,6 +587,19 @@ static void dpu_hw_intf_disable_autorefresh(struct dpu_hw_intf *intf,
 
 }
 
+bool dpu_hw_intf_boot_autorefresh(void __iomem *addr, bool stop)
+{
+	struct dpu_hw_intf intf = { .hw.blk_addr = addr };
+
+	if (!dpu_hw_intf_get_autorefresh_config(&intf, NULL))
+		return false;
+
+	if (stop)
+		dpu_hw_intf_setup_autorefresh_config(&intf, 0, false);
+
+	return true;
+}
+
 static void dpu_hw_intf_program_intf_cmd_cfg(struct dpu_hw_intf *intf,
 					     struct dpu_hw_intf_cmd_mode_cfg *cmd_mode_cfg)
 {

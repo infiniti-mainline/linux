@@ -410,17 +410,24 @@ static inline void msm_mdp_unregister(void) {}
 #ifdef CONFIG_DRM_MSM_DPU
 void msm_dpu_register(void);
 void msm_dpu_unregister(void);
+bool dpu_boot_splash(struct device *mdss, bool stop);
 #else
 static inline void msm_dpu_register(void) {}
 static inline void msm_dpu_unregister(void) {}
+static inline bool dpu_boot_splash(struct device *mdss, bool stop)
+{
+	return false;
+}
 #endif
 
 #ifdef CONFIG_DRM_MSM_MDSS
 void msm_mdss_register(void);
 void msm_mdss_unregister(void);
+void msm_mdss_take_over_splash(struct device *dev);
 #else
 static inline void msm_mdss_register(void) {}
 static inline void msm_mdss_unregister(void) {}
+static inline void msm_mdss_take_over_splash(struct device *dev) {}
 #endif
 
 #ifdef CONFIG_DEBUG_FS
