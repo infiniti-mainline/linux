@@ -739,7 +739,7 @@ bool qcom_sysmon_shutdown_irq_state(struct qcom_sysmon *sysmon)
 	bool shutdown_state;
 	int ret;
 
-	if (!sysmon)
+	if (!sysmon || sysmon->shutdown_irq <= 0)
 		return false;
 
 	ret = irq_get_irqchip_state(sysmon->shutdown_irq,
