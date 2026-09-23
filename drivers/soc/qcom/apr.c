@@ -367,9 +367,11 @@ static int apr_device_probe(struct device *dev)
 	struct apr_driver *adrv = to_apr_driver(dev->driver);
 	int ret;
 
+	adev->svc.callback = adrv->gpr_callback;
+
 	ret = adrv->probe(adev);
-	if (!ret)
-		adev->svc.callback = adrv->gpr_callback;
+	if (ret)
+		adev->svc.callback = NULL;
 
 	return ret;
 }
