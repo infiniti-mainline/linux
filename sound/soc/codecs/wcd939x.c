@@ -3135,7 +3135,7 @@ static int wcd939x_typec_mux_set(struct typec_mux_dev *mux,
 	unsigned int previous_mode = wcd939x->typec_mode;
 
 	if (!wcd939x->wcd_mbhc)
-		return -EINVAL;
+		return 0;
 
 	if (wcd939x->typec_mode != state->mode) {
 		wcd939x->typec_mode = state->mode;
