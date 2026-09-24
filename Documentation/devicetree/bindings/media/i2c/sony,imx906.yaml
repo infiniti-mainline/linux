@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/sony,imx906.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Sony IMX906 Image Sensor
+
+description:
+  Sony IMX906 is a 50 megapixel (8192x6144) 10-bit RAW image sensor,
+  controlled over I2C, with a 3-trio MIPI CSI-2 C-PHY output.
+
+maintainers:
+  - Victor Fuentes <victor@vlinkz.dev>
+
+allOf:
+  - $ref: /schemas/media/video-interface-devices.yaml#
+
+properties:
+  compatible:
+    const: sony,imx906
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    description: Input clock (INCK).
+    maxItems: 1
+
+  reset-gpios:
+    description: Active low GPIO connected to the reset pad of the sensor.
+    maxItems: 1
+
+  dovdd-supply:
+    description: Interface supply, 1.8 volts.
+
+  avdd-supply:
+    description: Analogue supply, 2.8 volts.
+
+  avdd1p8-supply:
+    description: Second analogue supply, 1.8 volts.
+
+  dvdd-supply:
+    description: Digital core supply, 1.1 volts.
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    additionalProperties: false
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          bus-type:
+            const: 1 # MIPI CSI-2 C-PHY
+
+          data-lanes:
+            description: The three C-PHY trios.
+            items:
+              - const: 1
+              - const: 2
+              - const: 3
+
+        required:
+          - bus-type
+          - data-lanes
+          - link-frequencies
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - port
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/media/video-interfaces.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@1a {
+            compatible = "sony,imx906";
+            reg = <0x1a>;
+            clocks = <&camera_mclk 1>;
+            assigned-clocks = <&camera_mclk 1>;
+            assigned-clock-rates = <19200000>;
+            reset-gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
+            dovdd-supply = <&vreg_1p8>;
+            avdd-supply = <&vreg_2p8>;
+            avdd1p8-supply = <&vreg_avdd_1p8>;
+            dvdd-supply = <&vreg_1p1>;
+
+            port {
+                endpoint {
+                    bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+                    link-frequencies = /bits/ 64 <1634400000 1020000000>;
+                    data-lanes = <1 2 3>;
+                    remote-endpoint = <&mipi_csi2_ep>;
+                };
+            };
+        };
+    };
+...
