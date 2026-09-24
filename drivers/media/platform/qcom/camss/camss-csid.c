@@ -547,7 +547,8 @@ static int csid_set_clock_rates(struct csid_device *csid)
 	fmt = csid_get_fmt_entry(csid->res->formats->formats, csid->res->formats->nformats,
 				 csid->fmt[MSM_CSIPHY_PAD_SINK].code);
 	link_freq = camss_get_link_freq(&csid->subdev.entity, fmt->bpp,
-					csid->phy.lane_cnt);
+					csid->phy.lane_cnt,
+					csid->phy.phy_sel == CSID_PHY_SEL_CPHY);
 	if (link_freq < 0)
 		link_freq = 0;
 
@@ -1278,6 +1279,7 @@ static int csid_link_setup(struct media_entity *entity,
 			csid->phy.lane_cnt = tpg->res->lane_cnt;
 			csid->phy.csiphy_id = tpg->id;
 			csid->phy.lane_assign = csid_get_lane_assign(NULL, csid->phy.lane_cnt);
+			csid->phy.phy_sel = CSID_PHY_SEL_DPHY;
 			csid->tpg_linked = true;
 		} else {
 			csiphy = v4l2_get_subdevdata(sd);
@@ -1292,6 +1294,10 @@ static int csid_link_setup(struct media_entity *entity,
 			lane_cfg = &csiphy->cfg.csi2->lane_cfg;
 			csid->phy.lane_cnt = lane_cfg->num_data;
 			csid->phy.lane_assign = csid_get_lane_assign(lane_cfg, lane_cfg->num_data);
+			if (lane_cfg->phy_cfg == V4L2_MBUS_CSI2_CPHY)
+				csid->phy.phy_sel = CSID_PHY_SEL_CPHY;
+			else
+				csid->phy.phy_sel = CSID_PHY_SEL_DPHY;
 			csid->tpg_linked = false;
 		}
 	}

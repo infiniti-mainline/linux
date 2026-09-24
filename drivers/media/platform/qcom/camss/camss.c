@@ -4912,12 +4912,16 @@ struct media_pad *camss_find_sensor_pad(struct media_entity *entity)
  * camss_get_link_freq - Get link frequency from sensor
  * @entity: Media entity in the current pipeline
  * @bpp: Number of bits per pixel for the current format
- * @lanes: Number of lanes in the link to the sensor
+ * @lanes: Number of lanes (trios for C-PHY) in the link to the sensor
+ * @cphy: The link uses C-PHY
+ *
+ * A C-PHY trio carries 16 bits per 7 symbols, and its link frequency is half
+ * the symbol rate, see Documentation/driver-api/media/tx-rx.rst.
  *
  * Return link frequency on success or a negative error code otherwise
  */
 s64 camss_get_link_freq(struct media_entity *entity, unsigned int bpp,
-			unsigned int lanes)
+			unsigned int lanes, bool cphy)
 {
 	struct media_pad *sensor_pad;
 
@@ -4925,7 +4929,8 @@ s64 camss_get_link_freq(struct media_entity *entity, unsigned int bpp,
 	if (!sensor_pad)
 		return -ENODEV;
 
-	return v4l2_get_link_freq(sensor_pad, bpp, 2 * lanes);
+	return v4l2_get_link_freq(sensor_pad, 16 * bpp,
+				  2 * lanes * (cphy ? 7 : 16));
 }
 
 /*
@@ -5044,11 +5049,17 @@ static int camss_parse_endpoint_node(struct device *dev,
 	if (ret)
 		return ret;
 
-	/*
-	 * Most SoCs support both D-PHY and C-PHY standards, but currently only
-	 * D-PHY is supported in the driver.
-	 */
-	if (vep.bus_type != V4L2_MBUS_CSI2_DPHY) {
+	switch (vep.bus_type) {
+	case V4L2_MBUS_CSI2_CPHY:
+		/* Only the CSI2 PHY driver knows how to program C-PHY trios */
+		if (!lane_base) {
+			dev_err(dev, "C-PHY needs a CSI2 PHY device\n");
+			return -EINVAL;
+		}
+		break;
+	case V4L2_MBUS_CSI2_DPHY:
+		break;
+	default:
 		dev_err(dev, "Unsupported bus type %d\n", vep.bus_type);
 		return -EINVAL;
 	}
@@ -5056,9 +5067,13 @@ static int camss_parse_endpoint_node(struct device *dev,
 	csd->interface.csiphy_id = vep.base.port;
 
 	mipi_csi2 = &vep.bus.mipi_csi2;
-	lncfg->clk.pos = mipi_csi2->clock_lane;
-	lncfg->clk.pol = mipi_csi2->lane_polarities[0];
+	lncfg->phy_cfg = vep.bus_type;
 	lncfg->num_data = mipi_csi2->num_data_lanes;
+
+	if (lncfg->phy_cfg == V4L2_MBUS_CSI2_DPHY) {
+		lncfg->clk.pos = mipi_csi2->clock_lane;
+		lncfg->clk.pol = mipi_csi2->lane_polarities[0];
+	}
 
 	lncfg->data = devm_kcalloc(dev,
 				   lncfg->num_data, sizeof(*lncfg->data),
