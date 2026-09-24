@@ -1534,6 +1534,7 @@ static const struct rpmh_vreg_init_data pm8010_vreg_data[] = {
 	RPMH_VREG("ldo5",  LDO,  5, &pmic5_pldo502,   "vdd-l5"),
 	RPMH_VREG("ldo6",  LDO,  6, &pmic5_pldo502ln, "vdd-l6"),
 	RPMH_VREG("ldo7",  LDO,  7, &pmic5_pldo502,   "vdd-l7"),
+	{}
 };
 
 static const struct rpmh_vreg_init_data pm6150_vreg_data[] = {
