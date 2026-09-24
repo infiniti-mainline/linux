@@ -9,8 +9,8 @@ title: Samsung S5KJN5 Image Sensor
 description:
   Samsung S5KJN5 is a 50MP 10-bit RAW MIPI CSI-2 image sensor.
   The sensor is controlled over I2C. The full resolution pixel array is
-  8192x6144, data output format is RAW10 transferred over 4-lane MIPI
-  D-PHY interface.
+  8192x6144, data output format is RAW10 transferred over a 4-lane MIPI
+  D-PHY or a 3-trio MIPI C-PHY interface.
 
 maintainers:
   - Wenmeng Liu <wenmeng.liu@oss.qualcomm.com>
@@ -65,7 +65,15 @@ properties:
         unevaluatedProperties: false
 
         properties:
+          bus-type:
+            enum:
+              - 1 # MIPI CSI-2 C-PHY
+              - 4 # MIPI CSI-2 D-PHY
+            default: 4
+
           data-lanes:
+            description: Four D-PHY data lanes, or three C-PHY trios.
+            minItems: 3
             items:
               - const: 1
               - const: 2
