@@ -9,7 +9,9 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/math64.h>
 #include <linux/time64.h>
+#include <linux/units.h>
 
 #include "phy-qcom-mipi-csi2.h"
 
@@ -23,6 +25,13 @@
 	((offset) + (common_status_offset) + 0x4 * (n))
 
 #define CSIPHY_2PH_LN_CSI_2PHASE_CTRL9n(n)		((0x200 * (n)) + 0x24)
+
+/* C-PHY trio n registers start at 0x200 + 0x400 * n, between the D-PHY lanes */
+#define CSIPHY_3PH_TRIO_BASE(n)				(0x200 + 0x400 * (n))
+#define CSIPHY_3PH_TRIO_REG(n, reg)			(CSIPHY_3PH_TRIO_BASE(n) + (reg))
+/* Reset release value for three-phase operation, as in the vendor driver */
+#define CSIPHY_3PH_CMN_CSI_COMMON_CTRL0_3PH_ENABLE	0x0e
+#define CSIPHY_3PH_CMN_CSI_COMMON_CTRL35_3PH_MODE	0x0e
 
 /*
  * 3 phase CSI has 19 common status regs with only 0-10 being used
@@ -162,6 +171,54 @@ mipi_csi2phy_lane_regs lane_regs_x1e80100[] = {
 	{.reg_addr = 0x0c64, .reg_data = 0x7f, .param_type = CSIPHY_SKEW_CAL},
 };
 
+/* 3nm 3PH v2.4.0 C-PHY trio setup, written to each active trio */
+static const struct
+mipi_csi2phy_lane_regs cphy_trio_regs_2_4_0[] = {
+	{.reg_addr = 0x0094, .reg_data = 0x0d},
+	{.reg_addr = 0x00f4, .reg_data = 0x00},
+	{.reg_addr = 0x00f8, .reg_data = 0x00},
+	{.reg_addr = 0x00fc, .reg_data = 0x00},
+	{.reg_addr = 0x00f0, .reg_data = 0xef, .delay_us = 211},
+	{.reg_addr = 0x0004, .reg_data = 0x00},
+	{.reg_addr = 0x00e4, .reg_data = 0x00},
+	{.reg_addr = 0x00e8, .reg_data = 0x7f},
+	{.reg_addr = 0x00ec, .reg_data = 0x7f},
+	{.reg_addr = 0x0018, .reg_data = 0x3e},
+	{.reg_addr = 0x001c, .reg_data = 0x41},
+	{.reg_addr = 0x0020, .reg_data = 0x41},
+	{.reg_addr = 0x0024, .reg_data = 0x7f},
+	{.reg_addr = 0x0028, .reg_data = 0x00},
+	{.reg_addr = 0x002c, .reg_data = 0x00},
+	{.reg_addr = 0x0064, .reg_data = 0x01},
+	{.reg_addr = 0x0044, .reg_data = 0xb2},
+	{.reg_addr = 0x0110, .reg_data = 0x35},
+	{.reg_addr = 0x00bc, .reg_data = 0xd0},
+	{.reg_addr = 0x0054, .reg_data = 0x00},
+	{.reg_addr = 0x0040, .reg_data = 0x00},
+	{.reg_addr = 0x0060, .reg_data = 0xa8},
+	{.reg_addr = 0x0084, .reg_data = 0x00},
+	{.reg_addr = 0x0090, .reg_data = 0x02},
+};
+
+/* 3nm 3PH v2.4.0 C-PHY rate dependent trio settings, 80 Msps to 6 Gsps */
+static const struct mipi_csi2phy_cphy_rate cphy_rates_2_4_0[] = {
+	/* max Msps, 0x6c, 0x70, 0x78, 0x8c, 0x14 */
+	{   80, 0x38, 0x00, 0x5f, 0x77, 0x6b },
+	{  100, 0x38, 0x00, 0x5f, 0x77, 0x6b },
+	{  200, 0x38, 0x00, 0x5f, 0x77, 0x33 },
+	{  700, 0x38, 0x00, 0x5f, 0x77, 0x20 },
+	{ 1000, 0x38, 0x00, 0x5f, 0x77, 0x09 },
+	{ 1500, 0x38, 0x00, 0x3f, 0x77, 0x09 },
+	{ 1700, 0x1d, 0x00, 0x26, 0x03, 0x09 },
+	{ 2000, 0x1d, 0x00, 0x26, 0x03, 0x00 },
+	{ 3000, 0x1d, 0x00, 0x1c, 0x03, 0x00 },
+	{ 3500, 0x1d, 0x00, 0x0f, 0x03, 0x00 },
+	{ 4000, 0x1d, 0x01, 0x0c, 0x75, 0x00 },
+	{ 4500, 0x1d, 0x01, 0x09, 0x75, 0x00 },
+	{ 5500, 0x3d, 0x01, 0x08, 0x75, 0x00 },
+	{ 6000, 0x1b, 0x02, 0x07, 0x77, 0x00 },
+};
+
 static inline const struct mipi_csi2phy_device_regs *
 csi2phy_dev_to_regs(struct mipi_csi2phy_device *csi2phy)
 {
@@ -273,6 +330,99 @@ phy_qcom_mipi_csi2_gen2_config_lanes(struct mipi_csi2phy_device *csi2phy,
 	}
 }
 
+/*
+ * phy_qcom_mipi_csi2_cphy_settle_cnt_calc - Calculate the C-PHY settle count
+ *
+ * Wait out T3-PREPARE and the first third of the preamble. 70 ns and 105 UI
+ * reproduce the settle counts in Qualcomm's rate tables for a 400 MHz timer.
+ */
+static u16 phy_qcom_mipi_csi2_cphy_settle_cnt_calc(u64 symbol_rate,
+						   u32 timer_clk_rate)
+{
+	u64 t_ps = 70000 + 105 * div64_u64(PSEC_PER_SEC, symbol_rate);
+	u64 cnt = div64_u64(t_ps * timer_clk_rate, PSEC_PER_SEC);
+
+	return cnt > 10 ? cnt - 10 : 0;
+}
+
+static int phy_qcom_mipi_csi2_cphy_lanes_enable(struct mipi_csi2phy_device *csi2phy,
+						struct mipi_csi2phy_stream_cfg *cfg)
+{
+	const struct mipi_csi2phy_device_regs *regs = csi2phy_dev_to_regs(csi2phy);
+	void __iomem *common = csi2phy->base + regs->common_regs_offset;
+	const struct mipi_csi2phy_cphy_rate *rate;
+	/* The link frequency of a C-PHY trio is half its symbol rate */
+	u64 symbol_rate = 2 * cfg->link_freq;
+	u32 lane_mask = 0;
+	u16 settle_cnt;
+	int i, j;
+
+	for (i = 0; i < regs->num_cphy_rates - 1; i++)
+		if (symbol_rate <= (u64)regs->cphy_rates[i].max_msps * HZ_PER_MHZ)
+			break;
+	rate = &regs->cphy_rates[i];
+
+	settle_cnt = phy_qcom_mipi_csi2_cphy_settle_cnt_calc(symbol_rate,
+							     csi2phy->timer_clk_rate);
+	if (!settle_cnt)
+		return -ENODEV;
+
+	/* Hold the PHY in reset while the trios are set up */
+	writel(CSIPHY_3PH_CMN_CSI_COMMON_CTRL0_PHY_SW_RESET,
+	       common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 0));
+
+	writel(0x00, common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 33));
+	writel(CSIPHY_3PH_CMN_CSI_COMMON_CTRL35_3PH_MODE,
+	       common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 35));
+	writel(0x7a, common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 7));
+	writel(CSIPHY_3PH_CMN_CSI_COMMON_CTRL6_COMMON_PWRDN_B,
+	       common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 6));
+
+	/* CSI_COMMON_CTRL5 bits 1, 3 and 5 power up the C-PHY trios */
+	for (i = 0; i < cfg->num_data_lanes; i++)
+		lane_mask |= BIT(cfg->lane_cfg.data[i].pos * 2 + 1);
+	writel(lane_mask, common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 5));
+
+	for (i = 0; i < cfg->num_data_lanes; i++) {
+		u8 trio = cfg->lane_cfg.data[i].pos;
+		void __iomem *base = csi2phy->base + CSIPHY_3PH_TRIO_BASE(trio);
+
+		for (j = 0; j < regs->cphy_array_size; j++) {
+			const struct mipi_csi2phy_lane_regs *r = &regs->cphy_init_seq[j];
+
+			writel(r->reg_data, base + r->reg_addr);
+			if (r->delay_us)
+				usleep_range(r->delay_us, r->delay_us + 10);
+		}
+
+		writel(0xf1, base + 0x0068);
+		writel(rate->reg_6c, base + 0x006c);
+		writel(rate->reg_70, base + 0x0070);
+		writel(0x00, base + 0x0074);
+		writel(rate->reg_78, base + 0x0078);
+		writel(0x00, base + 0x0088);
+		writel(rate->reg_8c, base + 0x008c);
+		writel(0x02, base + 0x0090);
+		writel(settle_cnt & 0xff, base + 0x000c);
+		writel(settle_cnt >> 8, base + 0x0008);
+		writel(0x00, base + 0x0010);
+		writel(rate->reg_14, base + 0x0014);
+	}
+
+	/* IRQ_MASK registers - disable all interrupts */
+	for (i = CSI_COMMON_STATUS_NUM; i < CSI_CTRL_STATUS_INDEX; i++)
+		writel(0, common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, i));
+
+	writel(CSIPHY_3PH_CMN_CSI_COMMON_CTRL0_3PH_ENABLE,
+	       common + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0, 0));
+	usleep_range(10, 20);
+
+	dev_dbg(csi2phy->dev, "C-PHY %u trios at %llu sps, settle count %u\n",
+		cfg->num_data_lanes, symbol_rate, settle_cnt);
+
+	return 0;
+}
+
 static int phy_qcom_mipi_csi2_lanes_enable(struct mipi_csi2phy_device *csi2phy,
 					   struct mipi_csi2phy_stream_cfg *cfg)
 {
@@ -284,6 +434,9 @@ static int phy_qcom_mipi_csi2_lanes_enable(struct mipi_csi2phy_device *csi2phy,
 
 	if (cfg->link_freq <= 0)
 		return -EINVAL;
+
+	if (cfg->cphy)
+		return phy_qcom_mipi_csi2_cphy_lanes_enable(csi2phy, cfg);
 
 	settle_cnt = phy_qcom_mipi_csi2_settle_cnt_calc(cfg->link_freq, csi2phy->timer_clk_rate);
 	if (!settle_cnt)
@@ -348,6 +501,13 @@ phy_qcom_mipi_csi2_lanes_disable(struct mipi_csi2phy_device *csi2phy,
 
 	writel(0, csi2phy->base +
 	       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->common_regs_offset, 6));
+
+	if (cfg->cphy) {
+		writel(0, csi2phy->base +
+		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->common_regs_offset, 35));
+		writel(CSIPHY_3PH_CMN_CSI_COMMON_CTRL0_PHY_SW_RESET, csi2phy->base +
+		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->common_regs_offset, 0));
+	}
 }
 
 static const struct mipi_csi2phy_hw_ops phy_qcom_mipi_csi2_ops_3ph_1_0 = {
@@ -395,6 +555,10 @@ const struct mipi_csi2phy_soc_cfg mipi_csi2_dphy_3nm_kaanapali = {
 	.reg_info = {
 		.init_seq = lane_regs_x1e80100,
 		.lane_array_size = ARRAY_SIZE(lane_regs_x1e80100),
+		.cphy_init_seq = cphy_trio_regs_2_4_0,
+		.cphy_array_size = ARRAY_SIZE(cphy_trio_regs_2_4_0),
+		.cphy_rates = cphy_rates_2_4_0,
+		.num_cphy_rates = ARRAY_SIZE(cphy_rates_2_4_0),
 		.common_regs_offset = 0x1000,
 		.common_status_offset = 0x138,
 	},

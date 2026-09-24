@@ -11,6 +11,7 @@
 #include <linux/phy/phy.h>
 
 #define CSI2_MAX_DATA_LANES	4
+#define CSI2_MAX_TRIOS		3
 #define CSI2_DEFAULT_CLK_LANE	7
 
 struct mipi_csi2phy_lane {
@@ -25,6 +26,7 @@ struct mipi_csi2phy_lanes_cfg {
 
 struct mipi_csi2phy_stream_cfg {
 	s64 link_freq;
+	bool cphy;
 	u8 num_data_lanes;
 	struct mipi_csi2phy_lanes_cfg lane_cfg;
 };
@@ -47,9 +49,26 @@ struct mipi_csi2phy_lane_regs {
 	const u32 param_type;
 };
 
+/*
+ * Rate dependent C-PHY trio settings, for symbol rates up to @max_msps. The
+ * registers are only known by their offsets.
+ */
+struct mipi_csi2phy_cphy_rate {
+	u32 max_msps;
+	u8 reg_6c;
+	u8 reg_70;
+	u8 reg_78;
+	u8 reg_8c;
+	u8 reg_14;
+};
+
 struct mipi_csi2phy_device_regs {
 	const struct mipi_csi2phy_lane_regs *init_seq;
 	const int lane_array_size;
+	const struct mipi_csi2phy_lane_regs *cphy_init_seq;
+	const int cphy_array_size;
+	const struct mipi_csi2phy_cphy_rate *cphy_rates;
+	const int num_cphy_rates;
 	const u32 common_regs_offset;
 	const u32 common_status_offset;
 };
