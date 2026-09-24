@@ -244,6 +244,7 @@ const struct iris_platform_data kaanapali_data = {
 	.tz_cp_config_data = tz_cp_config_kaanapali,
 	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_kaanapali),
 	.num_vpp_pipe = 2,
+	.hier_b_frames_only = true,
 	.max_session_count = 16,
 	.max_core_mbpf = NUM_MBS_8K * 2,
 	.max_core_mbps = ((8192 * 4352) / 256) * 60,

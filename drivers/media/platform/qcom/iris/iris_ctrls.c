@@ -464,6 +464,10 @@ void iris_session_init_caps(struct iris_core *core)
 		core->inst_fw_caps_enc[cap_id].flags = caps[i].flags;
 		core->inst_fw_caps_enc[cap_id].hfi_id = caps[i].hfi_id;
 		core->inst_fw_caps_enc[cap_id].set = caps[i].set;
+
+		if (cap_id == B_FRAME &&
+		    core->iris_platform_data->hier_b_frames_only)
+			core->inst_fw_caps_enc[cap_id].max = 0;
 	}
 }
 
