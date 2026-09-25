@@ -37,7 +37,6 @@ properties:
         - qcom,eliza-imem
         - qcom,glymur-imem
         - qcom,hawi-imem
-        - qcom,kaanapali-imem
         - qcom,maili-imem
         - qcom,milos-imem
         - qcom,rpm-msg-ram
