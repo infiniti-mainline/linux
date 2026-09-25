@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/firmware/qcom/qcom_tzmem.h>
+#include <linux/gfp.h>
 #include <linux/mm.h>
 
 #include "qcomtee.h"
@@ -114,14 +115,66 @@ static int qcomtee_shm_unregister(struct tee_context *ctx, struct tee_shm *shm)
 	return 0;
 }
 
+#define QCOMTEE_SHM_MAX_PAGES_EXACT	(PAGE_SIZE << MAX_PAGE_ORDER)
+
+static int qcomtee_shm_alloc_contig(struct tee_shm *shm, size_t size)
+{
+	size_t nr_pages = DIV_ROUND_UP(size, PAGE_SIZE);
+	struct page *page;
+	size_t i;
+	int rc;
+
+	page = alloc_contig_pages(nr_pages, GFP_KERNEL | __GFP_ZERO,
+				  numa_mem_id(), NULL);
+	if (!page)
+		return -ENOMEM;
+
+	shm->kaddr = page_address(page);
+	shm->paddr = page_to_phys(page);
+	shm->size = nr_pages * PAGE_SIZE;
+	shm->pages = kcalloc(nr_pages, sizeof(*shm->pages), GFP_KERNEL);
+	if (!shm->pages) {
+		rc = -ENOMEM;
+		goto err_free;
+	}
+	for (i = 0; i < nr_pages; i++)
+		shm->pages[i] = page + i;
+	shm->num_pages = nr_pages;
+
+	rc = qcomtee_shm_register(shm->ctx, shm, shm->pages, nr_pages, 0);
+	if (rc)
+		goto err_kfree;
+
+	return 0;
+
+err_kfree:
+	kfree(shm->pages);
+	shm->pages = NULL;
+err_free:
+	free_contig_range(page_to_pfn(page), nr_pages);
+	return rc;
+}
+
 static int pool_op_alloc(struct tee_shm_pool *pool, struct tee_shm *shm,
 			 size_t size, size_t align)
 {
+	if (size > QCOMTEE_SHM_MAX_PAGES_EXACT)
+		return qcomtee_shm_alloc_contig(shm, size);
+
 	return tee_dyn_shm_alloc_helper(shm, size, align, qcomtee_shm_register);
 }
 
 static void pool_op_free(struct tee_shm_pool *pool, struct tee_shm *shm)
 {
+	if (shm->size > QCOMTEE_SHM_MAX_PAGES_EXACT) {
+		qcomtee_shm_unregister(shm->ctx, shm);
+		free_contig_range(PHYS_PFN(shm->paddr), shm->num_pages);
+		kfree(shm->pages);
+		shm->pages = NULL;
+		shm->kaddr = NULL;
+		return;
+	}
+
 	tee_dyn_shm_free_helper(shm, qcomtee_shm_unregister);
 }
 
