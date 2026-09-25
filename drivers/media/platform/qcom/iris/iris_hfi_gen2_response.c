@@ -340,8 +340,6 @@ static int iris_hfi_gen2_handle_input_buffer(struct iris_inst *inst,
 	buf->attr &= ~BUF_ATTR_QUEUED;
 	buf->attr |= BUF_ATTR_DEQUEUED;
 
-	buf->flags = iris_hfi_gen2_get_driver_buffer_flags(inst, buffer->flags);
-
 	return 0;
 }
 
