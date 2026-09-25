@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/panel/oneplus,aa601-p-7-a0020.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: OnePlus AA601 P-7-A0020 AMOLED DSI panel
+
+maintainers:
+  - Victor Fuentes <victor@vlinkz.dev>
+
+description:
+  1272x2772 DSI command mode panel with Display Stream Compression, found
+  in the OnePlus 15.
+
+allOf:
+  - $ref: panel-common.yaml#
+
+properties:
+  compatible:
+    const: oneplus,aa601-p-7-a0020
+
+  reg:
+    maxItems: 1
+
+  vddio-supply: true
+  vdd-supply: true
+  vddr-supply: true
+  vci-supply: true
+
+required:
+  - compatible
+  - reg
+  - reset-gpios
+  - enable-gpios
+  - vddio-supply
+  - vdd-supply
+  - vddr-supply
+  - vci-supply
+  - port
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    dsi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        panel@0 {
+            compatible = "oneplus,aa601-p-7-a0020";
+            reg = <0>;
+
+            reset-gpios = <&tlmm 171 GPIO_ACTIVE_LOW>;
+            enable-gpios = <&pmk8850_gpios 1 GPIO_ACTIVE_HIGH>;
+
+            vddio-supply = <&vreg_l12b_1p8>;
+            vdd-supply = <&vreg_l11b_1p2>;
+            vddr-supply = <&panel_vddr>;
+            vci-supply = <&vreg_l13b_3p0>;
+
+            port {
+                endpoint {
+                    remote-endpoint = <&mdss_dsi0_out>;
+                };
+            };
+        };
+    };
