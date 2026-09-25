@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/input/touchscreen/synaptics,s3910.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Synaptics S3910 TouchComm touchscreen controller
+
+maintainers:
+  - Victor Fuentes <victor@vlinkz.dev>
+
+allOf:
+  - $ref: touchscreen.yaml#
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+
+properties:
+  compatible:
+    const: synaptics,s3910
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  reset-gpios:
+    maxItems: 1
+
+  vdd-supply:
+    description: 1.8 V I/O supply
+
+  avdd-supply:
+    description: Analog supply
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - reset-gpios
+  - vdd-supply
+  - avdd-supply
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    spi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        touchscreen@0 {
+            compatible = "synaptics,s3910";
+            reg = <0>;
+            spi-max-frequency = <19000000>;
+            interrupts-extended = <&tlmm 158 IRQ_TYPE_LEVEL_LOW>;
+            reset-gpios = <&tlmm 159 GPIO_ACTIVE_LOW>;
+            vdd-supply = <&vreg_l4b_1p8>;
+            avdd-supply = <&touch_avdd_2v8>;
+            touchscreen-size-x = <12640>;
+            touchscreen-size-y = <27800>;
+        };
+    };
