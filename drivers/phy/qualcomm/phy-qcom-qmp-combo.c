@@ -2597,6 +2597,7 @@ struct qmp_combo {
 	struct phy_configure_opts_dp dp_opts;
 	unsigned int dp_init_count;
 	bool dp_powered_on;
+	bool dp_active;
 
 	struct clk_fixed_rate pipe_clk_fixed;
 	struct clk_hw dp_link_hw;
@@ -4856,6 +4857,7 @@ static int qmp_combo_typec_mux_set(struct typec_mux_dev *mux, struct typec_mux_s
 		svid = 0;
 
 	if (svid == USB_TYPEC_DP_SID) {
+		qmp->dp_active = true;
 		switch (state->mode) {
 		/* DP Only */
 		case TYPEC_DP_STATE_C:
@@ -4872,7 +4874,13 @@ static int qmp_combo_typec_mux_set(struct typec_mux_dev *mux, struct typec_mux_s
 			new_mode = QMPPHY_MODE_USB3DP;
 			break;
 		}
+	} else if (state->mode == TYPEC_STATE_USB && qmp->dp_active) {
+		/* Keep the lanes of a DP sink that also does USB */
+		return 0;
 	} else {
+		if (state->mode == TYPEC_STATE_SAFE)
+			qmp->dp_active = false;
+
 		/* No DP SVID => don't care, assume it's just USB3 */
 		new_mode = QMPPHY_MODE_USB3_ONLY;
 	}
