@@ -15,6 +15,7 @@ allOf:
 properties:
   compatible:
     enum:
+      - nxp,tfa9866
       - nxp,tfa9890
       - nxp,tfa9895
       - nxp,tfa9897
@@ -24,6 +25,9 @@ properties:
 
   '#sound-dai-cells':
     const: 0
+
+  reset-gpios:
+    maxItems: 1
 
   rcv-gpios:
     description: optional GPIO to be asserted when receiver mode is enabled.
