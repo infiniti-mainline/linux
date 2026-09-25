@@ -219,6 +219,7 @@ static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
 	struct snd_interval *rate = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels = hw_param_interval(params,
@@ -235,6 +236,12 @@ static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	case TX_CODEC_DMA_TX_2:
 	case TX_CODEC_DMA_TX_3:
 		channels->min = 1;
+		break;
+	case PRIMARY_MI2S_RX:
+		if (!(codec_dai->driver->playback.formats & SNDRV_PCM_FMTBIT_S16_LE)) {
+			snd_mask_none(fmt);
+			snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S32_LE);
+		}
 		break;
 	default:
 		break;
