@@ -343,14 +343,44 @@
 		#size-cells = <2>;
 		ranges;
 
+		gunyah_hyp_mem: gunyah-hyp@80000000 {
+			reg = <0x0 0x80000000 0x0 0xe00000>;
+			no-map;
+		};
+
+		cpusys_vm_mem: cpusys-vm@80e00000 {
+			reg = <0x0 0x80e00000 0x0 0x400000>;
+			no-map;
+		};
+
+		cpucp_mem: cpucp@81200000 {
+			reg = <0x0 0x81200000 0x0 0x100000>;
+			no-map;
+		};
+
 		pdp_mem: pdp@81300000 {
 			reg = <0x0 0x81300000 0x0 0x100000>;
+			no-map;
+		};
+
+		xbl_dtlog_mem: xbl-dtlog@81a00000 {
+			reg = <0x0 0x81a00000 0x0 0x60000>;
+			no-map;
+		};
+
+		aop_image_mem: aop-image@81c00000 {
+			reg = <0x0 0x81c00000 0x0 0x60000>;
 			no-map;
 		};
 
 		aop_cmd_db_mem: aop-cmd-db@81c60000 {
 			compatible = "qcom,cmd-db";
 			reg = <0x0 0x81c60000 0x0 0x20000>;
+			no-map;
+		};
+
+		aop_tme_uefi_merged_mem: aop-tme-uefi-merged@81c80000 {
+			reg = <0x0 0x81c80000 0x0 0x74000>;
 			no-map;
 		};
 
@@ -363,6 +393,41 @@
 
 		pdp_ns_shared_mem: pdp-ns-shared@81f00000 {
 			reg = <0x0 0x81f00000 0x0 0x100000>;
+			no-map;
+		};
+
+		cpucp_scandump_mem: cpucp-scandump@82000000 {
+			reg = <0x0 0x82000000 0x0 0x380000>;
+			no-map;
+		};
+
+		adsp_mhi_mem: adsp-mhi@82380000 {
+			reg = <0x0 0x82380000 0x0 0x20000>;
+			no-map;
+		};
+
+		soccp_sdi_mem: soccp-sdi@823a0000 {
+			reg = <0x0 0x823a0000 0x0 0x40000>;
+			no-map;
+		};
+
+		pmic_minii_dump_mem: pmic-minii-dump@823e0000 {
+			reg = <0x0 0x823e0000 0x0 0x80000>;
+			no-map;
+		};
+
+		qup_fw_mem: qup-fw@82460000 {
+			reg = <0x0 0x82460000 0x0 0x18000>;
+			no-map;
+		};
+
+		pvmfw_mem: pvmfw@824a0000 {
+			reg = <0x0 0x824a0000 0x0 0x100000>;
+			no-map;
+		};
+
+		tz_stat_mem: tz-stat@82700000 {
+			reg = <0x0 0x82700000 0x0 0x100000>;
 			no-map;
 		};
 
@@ -431,6 +496,31 @@
 			no-map;
 		};
 
+		spu_tz_shared_mem: spu-tz-shared@9fc80000 {
+			reg = <0x0 0x9fc80000 0x0 0x40000>;
+			no-map;
+		};
+
+		spu_modem_shared_mem: spu-modem-shared@9fcc0000 {
+			reg = <0x0 0x9fcc0000 0x0 0x40000>;
+			no-map;
+		};
+
+		spss_region_mem: spss@9fd00000 {
+			reg = <0x0 0x9fd00000 0x0 0x2e0000>;
+			no-map;
+		};
+
+		dcp_dtb_mem: dcp-dtb@a0050000 {
+			reg = <0x0 0xa0050000 0x0 0x80000>;
+			no-map;
+		};
+
+		dcp_mem: dcp@a00d0000 {
+			reg = <0x0 0xa00d0000 0x0 0x300000>;
+			no-map;
+		};
+
 		soccp_mem: soccp@a03d0000 {
 			reg = <0x0 0xa03d0000 0x0 0x500000>;
 			no-map;
@@ -451,6 +541,21 @@
 			no-map;
 		};
 
+		gunyah_hyp_heap_mem: gunyah-hyp-heap@c3dd0000 {
+			reg = <0x0 0xc3dd0000 0x0 0xa30000>;
+			no-map;
+		};
+
+		xbl_ramdump_mem: xbl-ramdump@d7800000 {
+			reg = <0x0 0xd7800000 0x0 0x1c0000>;
+			no-map;
+		};
+
+		global_sync_mem: global-sync@d7a00000 {
+			reg = <0x0 0xd7a00000 0x0 0x200000>;
+			no-map;
+		};
+
 		rmtfs_mem: rmtfs@d7c00000 {
 			compatible = "qcom,rmtfs-mem";
 			reg = <0x0 0xd7c00000 0x0 0x400000>;
@@ -459,6 +564,16 @@
 			qcom,client-id = <1>;
 			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 		};
+		tz_merged_mem: tz-merged@d8000000 {
+			reg = <0x0 0xd8000000 0x0 0x800000>;
+			no-map;
+		};
+
+		llcc_lpi_mem: llcc-lpi@ff800000 {
+			reg = <0x0 0xff800000 0x0 0x800000>;
+			no-map;
+		};
+
 	};
 
 	smp2p-adsp {
