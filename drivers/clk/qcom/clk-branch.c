@@ -105,7 +105,12 @@ static int clk_branch_toggle(struct clk_hw *hw, bool en,
 		clk_disable_regmap(hw);
 	}
 
-	return clk_branch_wait(br, en, check_halt);
+	ret = clk_branch_wait(br, en, check_halt);
+	/* The clk core considers a branch that failed to turn on off */
+	if (ret && en)
+		clk_disable_regmap(hw);
+
+	return ret;
 }
 
 static int clk_branch_enable(struct clk_hw *hw)
